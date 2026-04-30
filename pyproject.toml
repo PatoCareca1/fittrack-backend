@@ -1,0 +1,26 @@
+[project]
+name = "fittrack-backend"
+version = "0.1.0"
+description = "FitTrack backend"
+authors = [
+    {name = "Author", email = "author@example.com"}
+]
+readme = "README.md"
+requires-python = "^3.12"
+dependencies = [
+    "asgiref (==3.11.1)",
+    "django (==6.0.4)",
+    "django-cors-headers (==4.9.0)",
+    "djangorestframework (==3.17.1)",
+    "djangorestframework-simplejwt (==5.3.1)",
+    "pillow (==11.0.0)",
+    "python-decouple (==3.8)",
+    "sqlparse (==0.5.5)"
+]
+
+[tool.poetry]
+package-mode = false
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"

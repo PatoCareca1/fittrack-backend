@@ -1,7 +1,7 @@
 .PHONY: help install migrate makemigrations run shell test superuser clean
 
 DJANGO_SETTINGS ?= config.settings.dev
-MANAGE = python manage.py
+MANAGE = poetry run python manage.py
 
 help:
 	@echo "FitTrack — comandos disponíveis:"
@@ -15,7 +15,7 @@ help:
 	@echo "  make clean           Remove arquivos de cache (.pyc, __pycache__)"
 
 install:
-	pip install -r requirements.txt
+	poetry install
 
 migrate:
 	$(MANAGE) migrate --settings=$(DJANGO_SETTINGS)
