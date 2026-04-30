@@ -64,6 +64,9 @@ docker-down:
 docker-logs:
 	docker compose logs -f web
 
+docker-makemigrations:
+	docker compose exec web python manage.py makemigrations
+
 docker-migrate:
 	docker compose exec web python manage.py migrate
 
