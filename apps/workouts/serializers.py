@@ -43,6 +43,8 @@ class WorkoutSerializer(serializers.ModelSerializer):
         many=True, source="workout_exercises", required=False, default=[]
     )
 
+    is_assigned = serializers.SerializerMethodField()
+
     class Meta:
         model = Workout
         fields = (
@@ -51,10 +53,15 @@ class WorkoutSerializer(serializers.ModelSerializer):
             "description",
             "is_template",
             "exercises",
+            "is_assigned",
             "created_at",
             "updated_at",
         )
-        read_only_fields = ("id", "created_at", "updated_at")
+        read_only_fields = ("id", "is_assigned", "created_at", "updated_at")
+
+    def get_is_assigned(self, obj):
+        request = self.context.get("request")
+        return bool(request and obj.user_id != request.user.id)
 
     def create(self, validated_data):
         exercises_data = validated_data.pop("workout_exercises", [])

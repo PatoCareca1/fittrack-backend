@@ -28,6 +28,7 @@ INSTALLED_APPS = [
     "apps.body",
     "apps.workouts",
     "apps.diet",
+    "apps.professional",
 ]
 
 AUTH_USER_MODEL = "users.User"

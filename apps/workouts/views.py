@@ -34,9 +34,15 @@ class WorkoutViewSet(ModelViewSet):
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]
 
     def get_queryset(self):
-        return Workout.objects.filter(user=self.request.user).prefetch_related(
-            "workout_exercises__exercise"
-        )
+        from django.db.models import Q
+        from apps.professional.models import WorkoutAssignment
+
+        assigned_ids = WorkoutAssignment.objects.filter(
+            link__student=self.request.user,
+            link__status="active",
+        ).values_list("workout_id", flat=True)
+
+        return (Workout.objects.filter(Q(user=self.request.user) | Q(id__in=assigned_ids)).prefetch_related("workout_exercises__exercise"))
 
     def create(self, request, *args, **kwargs):
         workout = services.create_workout(request.user, request.data)

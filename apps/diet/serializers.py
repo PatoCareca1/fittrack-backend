@@ -72,11 +72,16 @@ class MealSerializer(serializers.ModelSerializer):
 
 class MealPlanSerializer(serializers.ModelSerializer):
     meals = MealSerializer(many=True, required=False, default=[])
+    is_assigned = serializers.SerializerMethodField()
 
     class Meta:
         model = MealPlan
-        fields = ("id", "name", "description", "is_active", "meals", "created_at", "updated_at")
-        read_only_fields = ("id", "created_at", "updated_at")
+        fields = ("id", "name", "description", "is_active", "is_assigned", "meals", "created_at", "updated_at")
+        read_only_fields = ("id", "is_assigned", "created_at", "updated_at")
+
+    def get_is_assigned(self, obj) -> bool:
+        request = self.context.get("request")
+        return bool(request and obj.user_id != request.user.id)
 
     def create(self, validated_data):
         meals_data = validated_data.pop("meals", [])

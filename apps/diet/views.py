@@ -31,8 +31,16 @@ class MealPlanViewSet(ModelViewSet):
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]
 
     def get_queryset(self):
+        from django.db.models import Q
+        from apps.professional.models import MealPlanAssignment
+
+        assigned_ids = MealPlanAssignment.objects.filter(
+            link__student=self.request.user,
+            link__status="active",
+        ).values_list("meal_plan_id", flat=True)
+
         return (
-            MealPlan.objects.filter(user=self.request.user)
+            MealPlan.objects.filter(Q(user=self.request.user) | Q(id__in=assigned_ids))
             .prefetch_related("meals__items__food")
         )
 
