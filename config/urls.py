@@ -1,6 +1,10 @@
 from django.contrib import admin
 from django.urls import include, path
 
+admin.site.site_header = "FitTrack — Administração"
+admin.site.site_title = "FitTrack Admin"
+admin.site.index_title = "Painel administrativo"
+
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/v1/auth/", include("apps.users.urls")),
