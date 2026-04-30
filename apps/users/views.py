@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.users import services
+from apps.users.serializers import MeSerializer
 
 
 class RegisterView(APIView):
@@ -31,3 +32,14 @@ class LogoutView(APIView):
     def post(self, request: Request) -> Response:
         services.logout_user(request.data.get("refresh", ""))
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class MeView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request: Request) -> Response:
+        return Response(MeSerializer(request.user).data)
+
+    def patch(self, request: Request) -> Response:
+        user = services.update_me(request.user, request.data)
+        return Response(MeSerializer(user).data)

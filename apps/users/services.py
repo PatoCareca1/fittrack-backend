@@ -32,6 +32,14 @@ def logout_user(refresh_token: str) -> None:
         raise ValidationError("Token inválido ou já revogado.")
 
 
+def update_me(user: User, data: dict) -> User:
+    from apps.users.serializers import MeSerializer
+
+    serializer = MeSerializer(user, data=data, partial=True)
+    serializer.is_valid(raise_exception=True)
+    return serializer.save()
+
+
 def _generate_tokens(user: User) -> dict:
     refresh = RefreshToken.for_user(user)
     return {

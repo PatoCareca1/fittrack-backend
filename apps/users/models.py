@@ -8,6 +8,35 @@ class AccountType(models.TextChoices):
     NUTRITIONIST = "nutritionist", "Nutricionista"
 
 
+class Sex(models.TextChoices):
+    MALE = "M", "Masculino"
+    FEMALE = "F", "Feminino"
+
+
+class Goal(models.TextChoices):
+    WEIGHT_LOSS = "weight_loss", "Emagrecimento"
+    HYPERTROPHY = "hypertrophy", "Hipertrofia"
+    MAINTENANCE = "maintenance", "Manutenção"
+    GENERAL_HEALTH = "general_health", "Saúde geral"
+
+
+class ActivityLevel(models.TextChoices):
+    SEDENTARY = "sedentary", "Sedentário"
+    LIGHT = "light", "Levemente ativo"
+    MODERATE = "moderate", "Moderadamente ativo"
+    INTENSE = "intense", "Muito ativo"
+    VERY_INTENSE = "very_intense", "Extremamente ativo"
+
+
+ACTIVITY_FACTORS = {
+    ActivityLevel.SEDENTARY: 1.2,
+    ActivityLevel.LIGHT: 1.375,
+    ActivityLevel.MODERATE: 1.55,
+    ActivityLevel.INTENSE: 1.725,
+    ActivityLevel.VERY_INTENSE: 1.9,
+}
+
+
 class FitTrackUserManager(UserManager):
     def create_user(self, email, password=None, **extra_fields):
         if not email:
@@ -40,3 +69,27 @@ class User(AbstractUser):
 
     def __str__(self):
         return self.email
+
+
+class Profile(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="profile")
+    birth_date = models.DateField(null=True, blank=True)
+    sex = models.CharField(max_length=1, choices=Sex.choices, null=True, blank=True)
+    height_cm = models.PositiveSmallIntegerField(null=True, blank=True)
+    goal = models.CharField(max_length=20, choices=Goal.choices, default=Goal.GENERAL_HEALTH)
+    activity_level = models.CharField(
+        max_length=20,
+        choices=ActivityLevel.choices,
+        default=ActivityLevel.SEDENTARY,
+    )
+    avatar = models.ImageField(upload_to="avatars/", null=True, blank=True)
+    professional_verified = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Profile of {self.user.email}"
+
+    @property
+    def activity_factor(self) -> float:
+        return ACTIVITY_FACTORS.get(self.activity_level, 1.2)
