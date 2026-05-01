@@ -2,8 +2,9 @@ from rest_framework import generics, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
-from .models import Notification
+from .models import FCMDevice, Notification
 from .serializers import FCMDeviceSerializer, NotificationSerializer
 from .services import mark_all_as_read, mark_as_read, register_device
 
@@ -49,3 +50,16 @@ def mark_read_view(request, pk):
 def mark_all_read_view(request):
     count = mark_all_as_read(request.user)
     return Response({"marked_read": count})
+
+
+class DeactivateDeviceView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, device_id: str):
+        updated = FCMDevice.objects.filter(
+            user=request.user, device_id=device_id
+        ).update(is_active=False)
+        if not updated:
+            from rest_framework.exceptions import NotFound
+            raise NotFound("Dispositivo não encontrado.")
+        return Response(status=status.HTTP_204_NO_CONTENT)

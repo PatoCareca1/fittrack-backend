@@ -1,5 +1,6 @@
 from rest_framework import status
 from rest_framework.decorators import action
+from rest_framework.generics import ListAPIView
 from rest_framework.mixins import ListModelMixin, RetrieveModelMixin
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -8,6 +9,7 @@ from rest_framework.viewsets import GenericViewSet
 
 from apps.professional import services
 from apps.professional.models import (
+    LinkStatus,
     MealPlanAssignment,
     ProfessionalLink,
     WorkoutAssignment,
@@ -19,6 +21,7 @@ from apps.professional.serializers import (
     InviteCodeSerializer,
     MealPlanAssignmentSerializer,
     ProfessionalLinkSerializer,
+    StudentSummarySerializer,
     WorkoutAssignmentSerializer,
 )
 
@@ -93,3 +96,23 @@ class ProfessionalLinkViewSet(ListModelMixin, RetrieveModelMixin, GenericViewSet
             "workouts": WorkoutAssignmentSerializer(workouts, many=True).data,
             "meal_plans": MealPlanAssignmentSerializer(plans, many=True).data,
         })
+
+
+class StudentListView(ListAPIView):
+    """GET /professional/students/ — lista alunos vinculados ao profissional autenticado."""
+    permission_classes = [IsAuthenticated]
+    serializer_class = StudentSummarySerializer
+
+    def get_queryset(self):
+        from django.db.models import Count
+
+        return (
+            ProfessionalLink.objects
+            .filter(professional=self.request.user, status=LinkStatus.ACTIVE)
+            .select_related("student")
+            .annotate(
+                workout_assignment_count=Count("workout_assignments", distinct=True),
+                meal_plan_assignment_count=Count("meal_plan_assignments", distinct=True),
+            )
+            .order_by("student__first_name", "student__email")
+        )

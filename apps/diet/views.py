@@ -1,5 +1,6 @@
 from datetime import date as date_type
 
+from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -7,7 +8,7 @@ from rest_framework.views import APIView
 from rest_framework.viewsets import ModelViewSet
 
 from apps.diet import services
-from apps.diet.models import Food, MealLog, MealPlan
+from apps.diet.models import Food, Meal, MealLog, MealPlan
 from apps.diet.serializers import FoodSerializer, MealLogSerializer, MealPlanSerializer
 
 
@@ -90,3 +91,16 @@ class DailySummaryView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         return Response(services.get_daily_summary(request.user, target_date))
+
+
+class MarkMealDoneView(APIView):
+    """POST /diet/meals/{meal_id}/mark-done/ — registra a refeição como concluída no dia."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, meal_id: int):
+        meal = get_object_or_404(Meal, pk=meal_id)
+        log = services.log_meal(
+            request.user,
+            {"meal": meal.pk, "date": str(date_type.today())},
+        )
+        return Response(MealLogSerializer(log).data, status=status.HTTP_201_CREATED)

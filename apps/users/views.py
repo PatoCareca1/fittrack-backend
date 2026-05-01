@@ -5,7 +5,11 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.users import services
-from apps.users.serializers import MeSerializer
+from apps.users.serializers import (
+    MeSerializer,
+    PasswordResetConfirmSerializer,
+    PasswordResetRequestSerializer,
+)
 
 
 class RegisterView(APIView):
@@ -43,3 +47,31 @@ class MeView(APIView):
     def patch(self, request: Request) -> Response:
         user = services.update_me(request.user, request.data)
         return Response(MeSerializer(user).data)
+
+
+class PasswordResetRequestView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request: Request) -> Response:
+        serializer = PasswordResetRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        services.request_password_reset(
+            email=serializer.validated_data["email"],
+            reset_url_base=serializer.validated_data["reset_url_base"],
+        )
+        # Sempre 200 — não confirmar se o e-mail existe (evita enumeração)
+        return Response({"detail": "Se o e-mail estiver cadastrado, você receberá as instruções em breve."})
+
+
+class PasswordResetConfirmView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request: Request) -> Response:
+        serializer = PasswordResetConfirmSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        services.confirm_password_reset(
+            uid_b64=serializer.validated_data["uid"],
+            token=serializer.validated_data["token"],
+            new_password=serializer.validated_data["new_password"],
+        )
+        return Response({"detail": "Senha alterada com sucesso."})

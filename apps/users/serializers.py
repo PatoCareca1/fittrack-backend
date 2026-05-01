@@ -1,4 +1,5 @@
 from django.contrib.auth.password_validation import validate_password
+from django.conf import settings
 from rest_framework import serializers
 
 from apps.users.models import AccountType, Profile, User
@@ -57,3 +58,18 @@ class MeSerializer(serializers.ModelSerializer):
                 setattr(profile, attr, value)
             profile.save()
         return instance
+
+
+class PasswordResetRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    reset_url_base = serializers.CharField(
+        required=False,
+        default=getattr(settings, "PASSWORD_RESET_URL_BASE", "https://fittrack.app/reset-password"),
+        help_text="URL base para o link de reset enviado no e-mail.",
+    )
+
+
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    uid = serializers.CharField()
+    token = serializers.CharField()
+    new_password = serializers.CharField(write_only=True, validators=[validate_password])

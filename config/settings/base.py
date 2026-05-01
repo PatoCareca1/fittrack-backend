@@ -26,6 +26,7 @@ INSTALLED_APPS = [
     "rest_framework_simplejwt.token_blacklist",
     "corsheaders",
     "channels",
+    "drf_spectacular",
     "apps.users",
     "apps.body",
     "apps.workouts",
@@ -101,6 +102,7 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
 }
 
 SIMPLE_JWT = {
@@ -142,3 +144,29 @@ CELERY_BEAT_SCHEDULE = {
 }
 
 FIREBASE_CREDENTIALS_PATH = config("FIREBASE_CREDENTIALS_PATH", default="")
+
+# E-mail (override via .env em produção: EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend)
+EMAIL_BACKEND = config(
+    "EMAIL_BACKEND",
+    default="django.core.mail.backends.console.EmailBackend",
+)
+DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="noreply@fittrack.app")
+PASSWORD_RESET_URL_BASE = config(
+    "PASSWORD_RESET_URL_BASE",
+    default="https://fittrack.app/reset-password",
+)
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "FitTrack API",
+    "DESCRIPTION": (
+        "API REST + WebSocket do ecossistema FitTrack.\n\n"
+        "Autentique-se via JWT (Bearer token) obtido em `/api/v1/auth/login/`."
+    ),
+    "VERSION": "1.0.0",
+    "SERVE_INCLUDE_SCHEMA": False,
+    "COMPONENT_SPLIT_REQUEST": True,
+    "SWAGGER_UI_SETTINGS": {
+        "persistAuthorization": True,
+        "displayRequestDuration": True,
+    },
+}

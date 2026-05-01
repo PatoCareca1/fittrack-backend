@@ -5,6 +5,7 @@ from apps.professional.views import (
     AcceptInviteView,
     InviteCodeView,
     ProfessionalLinkViewSet,
+    StudentListView,
 )
 
 router = SimpleRouter()
@@ -13,4 +14,5 @@ router.register("links", ProfessionalLinkViewSet, basename="professional-links")
 urlpatterns = router.urls + [
     path("invite/", InviteCodeView.as_view(), name="professional-invite"),
     path("accept-invite/", AcceptInviteView.as_view(), name="professional-accept-invite"),
+    path("students/", StudentListView.as_view(), name="professional-students"),
 ]
