@@ -52,7 +52,6 @@ def accept_invite(student: User, code: str) -> ProfessionalLink:
     link = ProfessionalLink.objects.create(student=student, professional=professional)
     invite.used_by = student
     invite.save()
-    link.save()
     from apps.notifications.services import notify_link_accepted
     notify_link_accepted(link)
     return link

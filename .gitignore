@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 .env
 db.sqlite3
+
+# Scripts de teste manual (podem conter tokens)
+scripts/test_ws.py

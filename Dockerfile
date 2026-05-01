@@ -13,8 +13,9 @@ RUN pip install "poetry==$POETRY_VERSION"
 COPY pyproject.toml poetry.lock* ./
 RUN poetry install
 
+ENV REDIS_HOST=redis
+
 COPY . .
 
 EXPOSE 8000
 CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
-ENV REDIS_HOST=redis
