@@ -15,6 +15,7 @@ DEBUG = config("DEBUG", default=True, cast=bool)
 ALLOWED_HOSTS = []
 
 INSTALLED_APPS = [
+    "daphne",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -24,11 +25,13 @@ INSTALLED_APPS = [
     "rest_framework",
     "rest_framework_simplejwt.token_blacklist",
     "corsheaders",
+    "channels",
     "apps.users",
     "apps.body",
     "apps.workouts",
     "apps.diet",
     "apps.professional",
+    "apps.chat",
 ]
 
 AUTH_USER_MODEL = "users.User"
@@ -108,3 +111,17 @@ SIMPLE_JWT = {
 }
 
 CORS_ALLOWED_ORIGINS = []
+
+ASGI_APPLICATION = "config.asgi.application"
+
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [(
+                config("REDIS_HOST", default="localhost"),
+                int(config("REDIS_PORT", default="6379")),
+            )],
+        },
+    },
+}
