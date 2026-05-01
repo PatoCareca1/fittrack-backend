@@ -20,6 +20,11 @@ services:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   web:
     build: .
@@ -34,32 +39,39 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
 
   celery-worker:
     build: .
     command: poetry run celery -A config worker -l info
+    env_file: .env
     environment:
-      - DJANGO_SETTINGS_MODULE=config.settings.dev
-    env_file:
-      - .env
+      DJANGO_SETTINGS_MODULE: config.settings.dev
+      DB_HOST: db
+    volumes:
+      - .:/app
     depends_on:
       db:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
 
   celery-beat:
     build: .
     command: poetry run celery -A config beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    env_file: .env
     environment:
-      - DJANGO_SETTINGS_MODULE=config.settings.dev
-    env_file:
-      - .env
+      DJANGO_SETTINGS_MODULE: config.settings.dev
+      DB_HOST: db
+    volumes:
+      - .:/app
     depends_on:
       db:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
 
 volumes:
   postgres_data:
+
