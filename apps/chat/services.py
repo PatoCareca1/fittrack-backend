@@ -19,10 +19,18 @@ def _ensure_access(user: User, link_id: int) -> ProfessionalLink:
     return link
 
 
-def send_message(user: User, link_id: int, content: str) -> ChatMessage:
-    link = _ensure_access(user, link_id)
-    message = ChatMessage.objects.create(link=link, sender=user, content=content)
-    _broadcast(link_id, message)
+def send_message(link, sender, content: str) -> "ChatMessage":
+    from apps.chat.models import ChatMessage
+    message = ChatMessage.objects.create(link=link, sender=sender, content=content)
+    _broadcast(link.pk, {
+        "type": "chat_message",
+        "message_id": message.pk,
+        "sender_id": sender.pk,
+        "content": content,
+        "created_at": message.created_at.isoformat(),
+    })
+    from apps.notifications.services import notify_new_message
+    notify_new_message(message)
     return message
 
 

@@ -52,6 +52,9 @@ def accept_invite(student: User, code: str) -> ProfessionalLink:
     link = ProfessionalLink.objects.create(student=student, professional=professional)
     invite.used_by = student
     invite.save()
+    link.save()
+    from apps.notifications.services import notify_link_accepted
+    notify_link_accepted(link)
     return link
 
 
@@ -77,7 +80,10 @@ def assign_workout(professional: User, link_id: int, workout_id: int) -> Workout
     except Workout.DoesNotExist:
         raise ValidationError("Treino não encontrado ou não pertence a você.")
 
-    assignment, _ = WorkoutAssignment.objects.get_or_create(link=link, workout=workout)
+    assignment = WorkoutAssignment.objects.create(link=link, workout=workout)
+
+    from apps.notifications.services import notify_workout_assigned
+    notify_workout_assigned(assignment)
     return assignment
 
 
@@ -96,5 +102,8 @@ def assign_meal_plan(professional: User, link_id: int, plan_id: int) -> MealPlan
     except MealPlan.DoesNotExist:
         raise ValidationError("Plano não encontrado ou não pertence a você.")
 
-    assignment, _ = MealPlanAssignment.objects.get_or_create(link=link, meal_plan=plan)
+    assignment = MealPlanAssignment.objects.create(link=link, meal_plan=plan)
+
+    from apps.notifications.services import notify_meal_plan_assigned
+    notify_meal_plan_assigned(assignment)
     return assignment
