@@ -21,6 +21,13 @@
   (RN09 — nutricionista atribui plano; aluno vê somente leitura e marca refeições);
   revoke desativa atribuições de treino e dieta. 10 testes de API.
 
+- **Suporte ao MVP demo (2026-07-03)** — ver `../fittrack-mobile/MVP.md`: seed de
+  57 exercícios (`workouts.0002`), `body_fat_pct` opcional em BodyMetric (pesagem
+  simples; RN14 vale para bioimpedância — confirmar com Amanda), endpoints
+  granulares de refeição/item (preservam MealLogs; o PATCH aninhado recriava
+  refeições e apagava logs em cascata), `finish` de sessão aceita `notes`,
+  `workout_name` no serializer de sessão. 19 testes passando.
+
 ## O que falta
 
 1. **Sync completo TACO + Open Food Facts**: hoje a base é o seed estático de ~38

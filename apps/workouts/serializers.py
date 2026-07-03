@@ -101,12 +101,14 @@ class SetLogSerializer(serializers.ModelSerializer):
 
 class WorkoutSessionSerializer(serializers.ModelSerializer):
     set_logs = SetLogSerializer(many=True, read_only=True)
+    workout_name = serializers.CharField(source="workout.name", read_only=True)
 
     class Meta:
         model = WorkoutSession
         fields = (
             "id",
             "workout",
+            "workout_name",
             "status",
             "started_at",
             "finished_at",
