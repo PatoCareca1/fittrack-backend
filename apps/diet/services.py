@@ -1,8 +1,9 @@
 from datetime import date as date_cls
 
+from django.db import models
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
-from apps.diet.models import Food, FoodSource, Meal, MealLog, MealPlan
+from apps.diet.models import Food, FoodSource, Meal, MealItem, MealLog, MealPlan
 
 
 def create_meal_plan(user, data: dict) -> MealPlan:

@@ -88,5 +88,7 @@ class WorkoutSessionViewSet(RetrieveModelMixin, ListModelMixin, GenericViewSet):
 
     @action(detail=True, methods=["post"])
     def finish(self, request, pk=None):
-        session = services.finish_session(self.get_object())
+        session = services.finish_session(
+            self.get_object(), notes=request.data.get("notes", "")
+        )
         return Response(WorkoutSessionSerializer(session).data)

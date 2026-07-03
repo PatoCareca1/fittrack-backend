@@ -11,6 +11,7 @@ from apps.diet.serializers import (
     FoodSerializer,
     MealLogSerializer,
     MealPlanSerializer,
+    MealSerializer,
 )
 
 
@@ -62,10 +63,41 @@ class MealPlanViewSet(ModelViewSet):
 
 
 class MealViewSet(GenericViewSet):
-    """Ações sobre refeições individuais (marcação diária — RN09)."""
+    """CRUD granular de refeições + marcação diária (RN09).
+
+    A escrita granular não recria refeições (diferente do PATCH aninhado do
+    plano), preservando os MealLogs existentes.
+    """
 
     permission_classes = [IsAuthenticated]
     serializer_class = MealLogSerializer
+
+    def create(self, request):
+        meal = services.add_meal(
+            request.user,
+            plan_id=request.data.get("plan"),
+            name=request.data.get("name", ""),
+            time=request.data.get("time"),
+        )
+        return Response(MealSerializer(meal).data, status=status.HTTP_201_CREATED)
+
+    def partial_update(self, request, pk=None):
+        meal = services.update_meal(request.user, meal_id=pk, data=request.data)
+        return Response(MealSerializer(meal).data)
+
+    def destroy(self, request, pk=None):
+        services.delete_meal(request.user, meal_id=pk)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=True, methods=["post"], url_path="items")
+    def add_item(self, request, pk=None):
+        meal = services.add_meal_item(
+            request.user,
+            meal_id=pk,
+            food_id=request.data.get("food"),
+            quantity_g=request.data.get("quantity_g"),
+        )
+        return Response(MealSerializer(meal).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["post"], url_path="mark-done")
     def mark_done(self, request, pk=None):
@@ -80,6 +112,15 @@ class MealViewSet(GenericViewSet):
     @action(detail=True, methods=["post"], url_path="unmark")
     def unmark(self, request, pk=None):
         services.unmark_meal(request.user, meal_id=pk, log_date=request.data.get("date"))
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class MealItemViewSet(GenericViewSet):
+    permission_classes = [IsAuthenticated]
+    serializer_class = MealLogSerializer
+
+    def destroy(self, request, pk=None):
+        services.remove_meal_item(request.user, item_id=pk)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 

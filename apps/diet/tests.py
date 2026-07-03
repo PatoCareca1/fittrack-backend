@@ -105,6 +105,33 @@ class DietApiTests(TestCase):
         self.assertEqual(res.status_code, 204)
         self.assertEqual(MealLog.objects.count(), 0)
 
+    def test_granular_meal_crud_preserves_logs(self):
+        plan = self._create_plan().data
+        lunch_id = plan["meals"][0]["id"]
+        self.client.post(f"/api/v1/diet/meals/{lunch_id}/mark-done/")
+        # adicionar refeição nova não recria as existentes
+        res = self.client.post(
+            "/api/v1/diet/meals/", {"plan": plan["id"], "name": "Lanche", "time": "16:00"}
+        )
+        self.assertEqual(res.status_code, 201)
+        # adicionar item à refeição existente
+        res = self.client.post(
+            f"/api/v1/diet/meals/{lunch_id}/items/",
+            {"food": self.chicken.id, "quantity_g": 50},
+        )
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(len(res.data["items"]), 3)
+        # log do dia continua lá
+        self.assertEqual(MealLog.objects.count(), 1)
+        # remover item
+        item_id = res.data["items"][-1]["id"]
+        res = self.client.delete(f"/api/v1/diet/meal-items/{item_id}/")
+        self.assertEqual(res.status_code, 204)
+        # excluir refeição de outro usuário falha
+        self.client.force_authenticate(self.other)
+        res = self.client.delete(f"/api/v1/diet/meals/{lunch_id}/")
+        self.assertEqual(res.status_code, 400)
+
     def test_meal_log_list_filters_by_date(self):
         plan = self._create_plan().data
         meal_id = plan["meals"][0]["id"]

@@ -96,10 +96,12 @@ def log_set(session: WorkoutSession, data: dict) -> SetLog:
     return set_log
 
 
-def finish_session(session: WorkoutSession) -> WorkoutSession:
+def finish_session(session: WorkoutSession, notes: str = "") -> WorkoutSession:
     if session.status == SessionStatus.COMPLETED:
         raise ValidationError("Sessão já foi concluída.")
     session.status = SessionStatus.COMPLETED
     session.finished_at = timezone.now()
+    if notes:
+        session.notes = notes
     session.save()
     return session
