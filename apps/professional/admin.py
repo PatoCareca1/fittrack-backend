@@ -1,6 +1,10 @@
 from django.contrib import admin
 
-from apps.professional.models import ProfessionalLink, WorkoutAssignment
+from apps.professional.models import (
+    DietAssignment,
+    ProfessionalLink,
+    WorkoutAssignment,
+)
 
 
 @admin.register(ProfessionalLink)
@@ -13,4 +17,10 @@ class ProfessionalLinkAdmin(admin.ModelAdmin):
 @admin.register(WorkoutAssignment)
 class WorkoutAssignmentAdmin(admin.ModelAdmin):
     list_display = ("id", "link", "workout", "is_active", "created_at")
+    list_filter = ("is_active",)
+
+
+@admin.register(DietAssignment)
+class DietAssignmentAdmin(admin.ModelAdmin):
+    list_display = ("id", "link", "meal_plan", "is_active", "created_at")
     list_filter = ("is_active",)

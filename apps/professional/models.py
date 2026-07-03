@@ -63,4 +63,22 @@ class WorkoutAssignment(models.Model):
         return f"{self.workout} -> {self.link.student}"
 
 
-# DietAssignment entra quando o app `diet` tiver models (MealPlan ainda não existe).
+class DietAssignment(models.Model):
+    """Atribuição de plano alimentar do nutricionista ao aluno. Somente leitura
+    para o aluno, que apenas marca refeições e comenta (RN09)."""
+
+    link = models.ForeignKey(
+        ProfessionalLink, on_delete=models.CASCADE, related_name="diet_assignments"
+    )
+    meal_plan = models.ForeignKey(
+        "diet.MealPlan", on_delete=models.CASCADE, related_name="assignments"
+    )
+    notes = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["link", "is_active"])]
+
+    def __str__(self):
+        return f"{self.meal_plan} -> {self.link.student}"

@@ -1,6 +1,11 @@
 from rest_framework import serializers
 
-from apps.professional.models import ProfessionalLink, WorkoutAssignment
+from apps.diet.serializers import MealPlanSerializer
+from apps.professional.models import (
+    DietAssignment,
+    ProfessionalLink,
+    WorkoutAssignment,
+)
 from apps.users.serializers import UserSerializer
 from apps.workouts.serializers import WorkoutSerializer
 
@@ -30,6 +35,16 @@ class WorkoutAssignmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = WorkoutAssignment
         fields = ("id", "link", "student", "workout", "notes", "is_active", "created_at")
+        read_only_fields = fields
+
+
+class DietAssignmentSerializer(serializers.ModelSerializer):
+    meal_plan = MealPlanSerializer(read_only=True)
+    student = UserSerializer(source="link.student", read_only=True)
+
+    class Meta:
+        model = DietAssignment
+        fields = ("id", "link", "student", "meal_plan", "notes", "is_active", "created_at")
         read_only_fields = fields
 
 

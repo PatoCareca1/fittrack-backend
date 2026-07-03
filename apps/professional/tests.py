@@ -1,6 +1,7 @@
 from django.test import TestCase
 from rest_framework.test import APIClient
 
+from apps.diet.models import MealLog, MealPlan
 from apps.professional.models import LinkStatus, ProfessionalLink
 from apps.users.models import AccountType, User
 from apps.workouts.models import Workout
@@ -85,6 +86,43 @@ class ProfessionalFlowTests(TestCase):
             {"link": link.id, "workout": others.id},
         )
         self.assertEqual(res.status_code, 400)
+
+    def test_assign_meal_plan_and_student_marks_meal_done(self):
+        # nutricionista vincula, atribui plano; aluno vê e marca refeição (RN09)
+        self._accept(self._invite(self.nutritionist))
+        link = ProfessionalLink.objects.get(status=LinkStatus.ACTIVE)
+        plan = MealPlan.objects.create(user=self.nutritionist, name="Cutting 12sem")
+        meal = plan.meals.create(name="Almoço", order=1)
+
+        res = self._as(self.nutritionist).post(
+            "/api/v1/professional/diet-assignments/",
+            {"link": link.id, "meal_plan": plan.id, "notes": "2400 kcal"},
+        )
+        self.assertEqual(res.status_code, 201)
+
+        res = self._as(self.student).get("/api/v1/professional/diet-assignments/")
+        self.assertEqual(len(res.data), 1)
+        self.assertEqual(res.data[0]["meal_plan"]["name"], "Cutting 12sem")
+
+        res = self._as(self.student).post(
+            f"/api/v1/diet/meals/{meal.id}/mark-done/", {"comment": "segui certinho"}
+        )
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(MealLog.objects.get().user, self.student)
+
+    def test_student_cannot_edit_assigned_meal_plan(self):
+        # RN09: estrutura do plano atribuído é somente leitura para o aluno
+        self._accept(self._invite(self.nutritionist))
+        link = ProfessionalLink.objects.get(status=LinkStatus.ACTIVE)
+        plan = MealPlan.objects.create(user=self.nutritionist, name="Cutting 12sem")
+        self._as(self.nutritionist).post(
+            "/api/v1/professional/diet-assignments/",
+            {"link": link.id, "meal_plan": plan.id},
+        )
+        res = self._as(self.student).patch(
+            f"/api/v1/diet/meal-plans/{plan.id}/", {"name": "hackeado"}, format="json"
+        )
+        self.assertEqual(res.status_code, 404)  # plano não é do aluno
 
     def test_revoke_deactivates_assignments(self):
         self._accept(self._invite(self.personal))

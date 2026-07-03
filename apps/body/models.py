@@ -11,7 +11,9 @@ class BodyMetric(models.Model):
 
     # Obrigatórios (RN14)
     weight_kg = models.DecimalField(max_digits=5, decimal_places=2)
-    body_fat_pct = models.DecimalField(max_digits=5, decimal_places=2)
+    # Opcional desde o MVP demo: pesagem simples exige só o peso. RN14 (peso +
+    # % gordura obrigatórios) vale para o fluxo de bioimpedância, validado no app.
+    body_fat_pct = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
 
     # Opcionais (RN14)
     muscle_mass_kg = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)

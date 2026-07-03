@@ -5,7 +5,13 @@ from django.db import transaction
 from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
-from apps.professional.models import LinkStatus, ProfessionalLink, WorkoutAssignment
+from apps.diet.models import MealPlan
+from apps.professional.models import (
+    DietAssignment,
+    LinkStatus,
+    ProfessionalLink,
+    WorkoutAssignment,
+)
 from apps.users.models import AccountType, User
 from apps.workouts.models import Workout
 
@@ -65,20 +71,36 @@ def revoke_link(link: ProfessionalLink, actor: User) -> ProfessionalLink:
     link.revoked_at = timezone.now()
     link.save(update_fields=["status", "revoked_at"])
     link.workout_assignments.update(is_active=False)
+    link.diet_assignments.update(is_active=False)
     return link
+
+
+def _get_active_link(professional: User, link_id: int) -> ProfessionalLink:
+    try:
+        return ProfessionalLink.objects.get(
+            id=link_id, professional=professional, status=LinkStatus.ACTIVE
+        )
+    except ProfessionalLink.DoesNotExist:
+        raise ValidationError({"link": "Vínculo ativo não encontrado."})
 
 
 def assign_workout(
     professional: User, link_id: int, workout_id: int, notes: str = ""
 ) -> WorkoutAssignment:
-    try:
-        link = ProfessionalLink.objects.get(
-            id=link_id, professional=professional, status=LinkStatus.ACTIVE
-        )
-    except ProfessionalLink.DoesNotExist:
-        raise ValidationError({"link": "Vínculo ativo não encontrado."})
+    link = _get_active_link(professional, link_id)
     try:
         workout = Workout.objects.get(id=workout_id, user=professional)
     except Workout.DoesNotExist:
         raise ValidationError({"workout": "Treino não encontrado."})
     return WorkoutAssignment.objects.create(link=link, workout=workout, notes=notes)
+
+
+def assign_meal_plan(
+    professional: User, link_id: int, meal_plan_id: int, notes: str = ""
+) -> DietAssignment:
+    link = _get_active_link(professional, link_id)
+    try:
+        meal_plan = MealPlan.objects.get(id=meal_plan_id, user=professional)
+    except MealPlan.DoesNotExist:
+        raise ValidationError({"meal_plan": "Plano alimentar não encontrado."})
+    return DietAssignment.objects.create(link=link, meal_plan=meal_plan, notes=notes)
