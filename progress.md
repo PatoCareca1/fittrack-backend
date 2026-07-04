@@ -1,8 +1,19 @@
 # Progress — fittrack-backend
 
-Última atualização: 2026-07-03
+Última atualização: 2026-07-04
 
 ## O que já está pronto
+
+**Ambiente rodando ponta a ponta** (2026-07-04): `poetry install`, `docker compose up
+-d db` + `migrate` + `runserver 0.0.0.0:8000`, validado com o app mobile real
+(celular físico via Wi-Fi, ver `../fittrack-mobile/progress.md`). Achado no processo:
+o volume Docker local tinha um schema `diet_food` desatualizado (de antes da migration
+`0001_initial` ser reescrita com os nomes de campo atuais — `kcal`/`protein_g`/etc.)
+que quebrava `migrate` na seed da migration `0002`; resolvido com
+`docker compose down -v` (dado de dev, sem perda real). Nota para troubleshooting
+futuro adicionada ao README. Pendente: hospedar o backend (Render.com recomendado
+para teste, grátis) para não depender do notebook ligado — ver
+`../fittrack-mobile/progress.md` item 8.
 
 - `users`: auth completa (register/login/refresh/logout via SimpleJWT, email como
   username), `/me/` com Profile. Register retorna user + par de tokens.

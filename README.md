@@ -48,6 +48,8 @@ GET/POST /professional/diet-assignments/    atribuição de plano alimentar (RN0
 ## Rodando
 
 ```bash
+poetry install                    # 1ª vez: instala deps Python em .venv/ (in-project)
+cp .env.example .env              # 1ª vez
 docker compose up -d db      # PostgreSQL (porta 5432)
 .venv/bin/python manage.py migrate
 .venv/bin/python manage.py runserver              # só localhost (web/emulador)
@@ -58,6 +60,15 @@ docker compose up -d db      # PostgreSQL (porta 5432)
 Variáveis em `.env` (ver `.env.example`).
 
 **Para o app mobile no celular físico**: rode com `0.0.0.0:8000` (o `ALLOWED_HOSTS`
-de dev já aceita), garanta celular e notebook na mesma rede Wi-Fi e libere a porta
-8000 no firewall se houver. O passo a passo completo do lado do app está em
+de dev já aceita), garanta celular e notebook na mesma rede (Wi-Fi ou o PC na LAN
+por cabo/roteador — não precisa Wi-Fi no PC, só estar na mesma sub-rede) e libere
+a porta 8000 no firewall se houver. O passo a passo completo do lado do app está em
 `../fittrack-mobile/README.md` (seção "Rodando").
+
+**Troubleshooting — `migrate` falha com "column ... does not exist"**: normalmente é
+o volume Docker do Postgres com um schema antigo (de uma versão anterior de algum
+model, antes de uma migration ser reescrita). Como é só dado de dev/seed, resete:
+```bash
+docker compose down -v && docker compose up -d db
+.venv/bin/python manage.py migrate
+```
