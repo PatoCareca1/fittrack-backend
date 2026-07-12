@@ -29,6 +29,7 @@ INSTALLED_APPS = [
     "apps.workouts",
     "apps.diet",
     "apps.professional",
+    "apps.coach",
 ]
 
 AUTH_USER_MODEL = "users.User"
@@ -108,3 +109,11 @@ SIMPLE_JWT = {
 }
 
 CORS_ALLOWED_ORIGINS = []
+
+# apps.coach — camada de agentes de IA
+COACH_GENERATOR_PROVIDER = config("COACH_GENERATOR_PROVIDER", default="anthropic")
+COACH_CRITIC_PROVIDER = config("COACH_CRITIC_PROVIDER", default="gemini")
+COACH_MAX_ITERATIONS = config("COACH_MAX_ITERATIONS", default=3, cast=int)
+
+ANTHROPIC_API_KEY = config("ANTHROPIC_API_KEY", default="")
+GEMINI_API_KEY = config("GEMINI_API_KEY", default="")
