@@ -20,8 +20,11 @@ from apps.coach.services import add_message, create_meal_plan_from_agent
 
 
 def run_plan_job(job_id: int, message: str) -> None:
-    """O trabalho de fato. Público (sem underscore) para que os testes possam
-    chamá-lo diretamente, de forma síncrona, sem depender de threading."""
+    """O trabalho de fato — não fecha conexão de banco nenhuma, porque quem
+    chama pode estar na mesma thread (é o caso dos testes, que chamam esta
+    função diretamente, de forma síncrona). Fechar a conexão aqui derrubaria
+    a conexão de quem chamou. Ver `_run_plan_job_in_thread` para o wrapper
+    usado de fato pela thread em background."""
     try:
         job = CoachJob.objects.select_related("user", "conversation").get(id=job_id)
         job.status = CoachJobStatus.RUNNING
@@ -73,6 +76,14 @@ def run_plan_job(job_id: int, message: str) -> None:
         job.save(update_fields=["status", "result", "updated_at"])
     except Exception as exc:
         CoachJob.objects.filter(id=job_id).update(status=CoachJobStatus.FAILED, error=str(exc))
+
+
+def _run_plan_job_in_thread(job_id: int, message: str) -> None:
+    """Alvo real da threading.Thread: roda o job e, ao final, fecha a
+    conexão de banco desta thread — cada thread abre a sua própria conexão
+    e o Django não a libera sozinho quando a thread termina."""
+    try:
+        run_plan_job(job_id, message)
     finally:
         connection.close()
 
@@ -84,6 +95,6 @@ def enqueue_plan_job(user, message: str, conversation=None) -> CoachJob:
         intent=Intent.DIET_PLAN,
         status=CoachJobStatus.PENDING,
     )
-    thread = threading.Thread(target=run_plan_job, args=(job.id, message), daemon=True)
+    thread = threading.Thread(target=_run_plan_job_in_thread, args=(job.id, message), daemon=True)
     thread.start()
     return job

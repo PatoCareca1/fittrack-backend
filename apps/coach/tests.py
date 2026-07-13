@@ -517,20 +517,16 @@ class CoachedPipelineTests(DietFixturesMixin, TestCase):
         mock_critic_provider.assert_not_called()
 
 
-class _ImmediateThread:
-    """Substitui threading.Thread nos testes: roda o alvo de forma síncrona,
-    na mesma thread, para não depender de concorrência real nem de sleeps."""
-
-    def __init__(self, target=None, args=(), kwargs=None, daemon=None):
-        self._target = target
-        self._args = args
-        self._kwargs = kwargs or {}
-
-    def start(self):
-        self._target(*self._args, **self._kwargs)
-
-    def join(self, *args, **kwargs):
-        pass
+def _synchronous_enqueue_plan_job(user, message, conversation=None):
+    """Substitui runner.enqueue_plan_job nos testes de view: cria o job e
+    chama run_plan_job() diretamente, na mesma thread — sem passar por
+    threading.Thread, que fecharia a conexão de banco compartilhada pelo
+    TestCase ao final da execução."""
+    job = CoachJob.objects.create(
+        user=user, conversation=conversation, intent=Intent.DIET_PLAN, status=CoachJobStatus.PENDING
+    )
+    run_plan_job(job.id, message)
+    return job
 
 
 class ManagerRouteTests(TestCase):
@@ -597,11 +593,11 @@ class CoachMessageViewTests(DietFixturesMixin, TestCase):
         )
         self.assertEqual(res.status_code, 401)
 
-    @patch("apps.coach.runner.threading.Thread", _ImmediateThread)
+    @patch("apps.coach.views.enqueue_plan_job", side_effect=_synchronous_enqueue_plan_job)
     @patch("apps.coach.agents.critic.get_provider")
     @patch("apps.coach.agents.diet.get_provider")
     def test_diet_message_returns_202_and_job_ends_succeeded(
-        self, mock_diet_provider, mock_critic_provider
+        self, mock_diet_provider, mock_critic_provider, mock_enqueue
     ):
         diet_provider = MagicMock()
         diet_provider.model = "claude-sonnet-4-5"
