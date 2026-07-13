@@ -16,6 +16,22 @@ class CoachAgent(models.TextChoices):
     CRITIC = "critic", "Crítico"
 
 
+class Intent(models.TextChoices):
+    """Intenção roteada pelo Agente Gerente (apps.coach.agents.manager)."""
+
+    DIET_PLAN = "diet_plan", "Plano alimentar"
+    WORKOUT_PLAN = "workout_plan", "Plano de treino"
+    OUT_OF_SCOPE = "out_of_scope", "Fora de escopo"
+    AMBIGUOUS = "ambiguous", "Ambíguo"
+
+
+class CoachJobStatus(models.TextChoices):
+    PENDING = "pending", "Pendente"
+    RUNNING = "running", "Em execução"
+    SUCCEEDED = "succeeded", "Concluído"
+    FAILED = "failed", "Falhou"
+
+
 class CoachConversation(models.Model):
     user = models.ForeignKey(
         User, on_delete=models.CASCADE, related_name="coach_conversations"
@@ -73,3 +89,31 @@ class AgentRun(models.Model):
 
     def __str__(self):
         return f"{self.agent} via {self.provider} ({self.created_at:%Y-%m-%d %H:%M})"
+
+
+class CoachJob(models.Model):
+    """Execução assíncrona de um pedido roteado ao Agente Gerente (por ora,
+    só geração de plano alimentar). Ver apps/coach/runner.py."""
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="coach_jobs")
+    conversation = models.ForeignKey(
+        CoachConversation,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="jobs",
+    )
+    intent = models.CharField(max_length=20, choices=Intent.choices)
+    status = models.CharField(
+        max_length=10, choices=CoachJobStatus.choices, default=CoachJobStatus.PENDING
+    )
+    result = models.JSONField(default=dict, blank=True)
+    error = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"Job {self.pk} — {self.user.email} ({self.status})"

@@ -4,15 +4,27 @@ from unittest.mock import MagicMock, patch
 from django.conf import settings
 from django.test import TestCase, override_settings
 from rest_framework.exceptions import ValidationError
+from rest_framework.test import APIClient
 
 from apps.body.models import BodyMetric
 from apps.coach.agents.critic import review_meal_plan
 from apps.coach.agents.diet import generate_and_review_meal_plan, generate_meal_plan
-from apps.coach.models import AgentRun, CoachAgent, CoachConversation, CoachMessage, MessageRole
+from apps.coach.agents.manager import route
+from apps.coach.models import (
+    AgentRun,
+    CoachAgent,
+    CoachConversation,
+    CoachJob,
+    CoachJobStatus,
+    CoachMessage,
+    Intent,
+    MessageRole,
+)
 from apps.coach.providers.anthropic_provider import AnthropicProvider
 from apps.coach.providers.base import LLMResponse
 from apps.coach.providers.gemini_provider import GeminiProvider
 from apps.coach.providers.registry import get_provider
+from apps.coach.runner import run_plan_job
 from apps.coach.validators import compute_totals, validate_meal_plan
 from apps.diet.models import Food, FoodSource, MealPlan
 from apps.users.models import User
@@ -503,3 +515,247 @@ class CoachedPipelineTests(DietFixturesMixin, TestCase):
         self.assertEqual(result.critic_rounds, 0)
         critic_provider.complete.assert_not_called()
         mock_critic_provider.assert_not_called()
+
+
+class _ImmediateThread:
+    """Substitui threading.Thread nos testes: roda o alvo de forma síncrona,
+    na mesma thread, para não depender de concorrência real nem de sleeps."""
+
+    def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+        self._target = target
+        self._args = args
+        self._kwargs = kwargs or {}
+
+    def start(self):
+        self._target(*self._args, **self._kwargs)
+
+    def join(self, *args, **kwargs):
+        pass
+
+
+class ManagerRouteTests(TestCase):
+    @patch("apps.coach.agents.manager.get_provider")
+    def test_route_diet_by_keyword_does_not_call_llm(self, mock_get_provider):
+        intent = route("Quero um plano alimentar para emagrecer")
+        self.assertEqual(intent, Intent.DIET_PLAN)
+        mock_get_provider.assert_not_called()
+
+    @patch("apps.coach.agents.manager.get_provider")
+    def test_route_workout_by_keyword_does_not_call_llm(self, mock_get_provider):
+        intent = route("Preciso montar uma ficha de treino nova")
+        self.assertEqual(intent, Intent.WORKOUT_PLAN)
+        mock_get_provider.assert_not_called()
+
+    @patch("apps.coach.agents.manager.get_provider")
+    def test_route_calls_llm_only_when_ambiguous(self, mock_get_provider):
+        provider = MagicMock()
+        provider.model = "claude-sonnet-4-5"
+        provider.complete.return_value = LLMResponse(
+            text=json.dumps(
+                {"intent": "out_of_scope", "reason": "Dúvida de cobrança, não é sobre saúde."}
+            ),
+            tool_calls=[],
+            usage={"input_tokens": 5, "output_tokens": 5},
+        )
+        mock_get_provider.return_value = provider
+
+        intent = route("Estou com uma dúvida sobre o pagamento da minha assinatura.")
+
+        self.assertEqual(intent, Intent.OUT_OF_SCOPE)
+        provider.complete.assert_called_once()
+        self.assertEqual(AgentRun.objects.filter(agent=CoachAgent.MANAGER).count(), 1)
+
+    @patch("apps.coach.agents.manager.get_provider")
+    def test_route_llm_invalid_intent_falls_back_to_ambiguous(self, mock_get_provider):
+        provider = MagicMock()
+        provider.model = "claude-sonnet-4-5"
+        provider.complete.return_value = LLMResponse(
+            text=json.dumps({"intent": "algo_fora_do_enum", "reason": "..."}),
+            tool_calls=[],
+            usage={},
+        )
+        mock_get_provider.return_value = provider
+
+        intent = route("sei la, me ajuda com uma coisa")
+
+        self.assertEqual(intent, Intent.AMBIGUOUS)
+        run = AgentRun.objects.filter(agent=CoachAgent.MANAGER).latest("created_at")
+        self.assertFalse(run.approved)
+        self.assertTrue(run.validation_errors)
+
+
+class CoachMessageViewTests(DietFixturesMixin, TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(email="aluno@test.dev", password="x")
+        self._make_foods()
+        self.metric = _make_metric(self.user)
+        self.client = APIClient()
+
+    def test_requires_authentication(self):
+        res = self.client.post(
+            "/api/v1/coach/messages/", {"message": "Quero uma dieta"}, format="json"
+        )
+        self.assertEqual(res.status_code, 401)
+
+    @patch("apps.coach.runner.threading.Thread", _ImmediateThread)
+    @patch("apps.coach.agents.critic.get_provider")
+    @patch("apps.coach.agents.diet.get_provider")
+    def test_diet_message_returns_202_and_job_ends_succeeded(
+        self, mock_diet_provider, mock_critic_provider
+    ):
+        diet_provider = MagicMock()
+        diet_provider.model = "claude-sonnet-4-5"
+        diet_provider.complete.return_value = LLMResponse(
+            text=json.dumps(self._valid_proposal()), tool_calls=[], usage={}
+        )
+        mock_diet_provider.return_value = diet_provider
+
+        critic_provider = MagicMock()
+        critic_provider.model = "gemini-2.5-flash"
+        critic_provider.complete.return_value = _good_critic_response()
+        mock_critic_provider.return_value = critic_provider
+
+        self.client.force_authenticate(self.user)
+        res = self.client.post(
+            "/api/v1/coach/messages/", {"message": "Quero um plano alimentar"}, format="json"
+        )
+
+        self.assertEqual(res.status_code, 202)
+        self.assertIn("job_id", res.data)
+        self.assertEqual(res.data["intent"], Intent.DIET_PLAN)
+
+        job = CoachJob.objects.get(id=res.data["job_id"])
+        self.assertEqual(job.user, self.user)
+        self.assertEqual(job.status, CoachJobStatus.SUCCEEDED)
+        self.assertEqual(MealPlan.objects.filter(user=self.user).count(), 1)
+
+    @patch("apps.coach.agents.manager.get_provider")
+    def test_workout_message_returns_200_with_unavailable_notice(self, mock_get_provider):
+        self.client.force_authenticate(self.user)
+        res = self.client.post(
+            "/api/v1/coach/messages/", {"message": "Quero uma ficha de treino"}, format="json"
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["intent"], Intent.WORKOUT_PLAN)
+        mock_get_provider.assert_not_called()
+
+    @patch("apps.coach.agents.manager.get_provider")
+    def test_out_of_scope_message_returns_200_polite_refusal(self, mock_get_provider):
+        provider = MagicMock()
+        provider.model = "claude-sonnet-4-5"
+        provider.complete.return_value = LLMResponse(
+            text=json.dumps({"intent": "out_of_scope", "reason": "..."}), tool_calls=[], usage={}
+        )
+        mock_get_provider.return_value = provider
+
+        self.client.force_authenticate(self.user)
+        res = self.client.post(
+            "/api/v1/coach/messages/",
+            {"message": "Estou com uma dúvida sobre o pagamento da assinatura."},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["intent"], Intent.OUT_OF_SCOPE)
+
+
+class CoachJobAndConversationApiTests(DietFixturesMixin, TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(email="aluno@test.dev", password="x")
+        self.other = User.objects.create_user(email="outro@test.dev", password="x")
+        self._make_foods()
+        self.metric = _make_metric(self.user)
+        self.client = APIClient()
+
+    def test_job_full_flow_succeeded_persists_meal_plan_for_owner(self):
+        job = CoachJob.objects.create(user=self.user, intent=Intent.DIET_PLAN)
+
+        with (
+            patch("apps.coach.agents.diet.get_provider") as mock_diet_provider,
+            patch("apps.coach.agents.critic.get_provider") as mock_critic_provider,
+        ):
+            diet_provider = MagicMock()
+            diet_provider.model = "claude-sonnet-4-5"
+            diet_provider.complete.return_value = LLMResponse(
+                text=json.dumps(self._valid_proposal()), tool_calls=[], usage={}
+            )
+            mock_diet_provider.return_value = diet_provider
+
+            critic_provider = MagicMock()
+            critic_provider.model = "gemini-2.5-flash"
+            critic_provider.complete.return_value = _good_critic_response()
+            mock_critic_provider.return_value = critic_provider
+
+            run_plan_job(job.id, "Quero um plano alimentar")  # síncrono, sem thread
+
+        job.refresh_from_db()
+        self.assertEqual(job.status, CoachJobStatus.SUCCEEDED)
+        meal_plan = MealPlan.objects.get(id=job.result["meal_plan_id"])
+        self.assertEqual(meal_plan.user, self.user)
+
+        self.client.force_authenticate(self.user)
+        res = self.client.get(f"/api/v1/coach/jobs/{job.id}/")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["status"], CoachJobStatus.SUCCEEDED)
+        self.assertIsNotNone(res.data["meal_plan"])
+        self.assertEqual(res.data["meal_plan"]["id"], meal_plan.id)
+
+    def test_job_rejected_by_validation_has_no_meal_plan_but_exposes_errors(self):
+        job = CoachJob.objects.create(user=self.user, intent=Intent.DIET_PLAN)
+
+        proposal = self._valid_proposal()
+        proposal["meals"][1]["order"] = 1  # order duplicado -> reprovado na validação
+
+        with (
+            patch("apps.coach.agents.diet.get_provider") as mock_diet_provider,
+            patch("apps.coach.agents.critic.get_provider") as mock_critic_provider,
+        ):
+            diet_provider = MagicMock()
+            diet_provider.model = "claude-sonnet-4-5"
+            diet_provider.complete.return_value = LLMResponse(
+                text=json.dumps(proposal), tool_calls=[], usage={}
+            )
+            mock_diet_provider.return_value = diet_provider
+            mock_critic_provider.return_value = MagicMock()
+
+            run_plan_job(job.id, "Quero um plano alimentar")
+
+        job.refresh_from_db()
+        # O pipeline rodou até o fim sem erro de sistema — só não aprovou.
+        # "failed" fica reservado para exceções (ver comentário em runner.py).
+        self.assertEqual(job.status, CoachJobStatus.SUCCEEDED)
+        self.assertEqual(MealPlan.objects.count(), 0)
+        self.assertIsNone(job.result.get("meal_plan_id"))
+        self.assertTrue(job.result.get("errors"))
+        mock_critic_provider.assert_not_called()
+
+    def test_user_cannot_access_job_of_another_user(self):
+        job = CoachJob.objects.create(user=self.other, intent=Intent.DIET_PLAN)
+        self.client.force_authenticate(self.user)
+        res = self.client.get(f"/api/v1/coach/jobs/{job.id}/")
+        self.assertEqual(res.status_code, 404)
+
+    def test_user_cannot_access_conversation_of_another_user(self):
+        conversation = CoachConversation.objects.create(user=self.other)
+        self.client.force_authenticate(self.user)
+        res = self.client.get(f"/api/v1/coach/conversations/{conversation.id}/messages/")
+        self.assertEqual(res.status_code, 404)
+
+    def test_own_conversation_messages_are_listed(self):
+        conversation = CoachConversation.objects.create(user=self.user)
+        CoachMessage.objects.create(
+            conversation=conversation, role=MessageRole.USER, content="Oi"
+        )
+        self.client.force_authenticate(self.user)
+        res = self.client.get(f"/api/v1/coach/conversations/{conversation.id}/messages/")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(len(res.data), 1)
+
+    def test_jobs_endpoint_requires_authentication(self):
+        job = CoachJob.objects.create(user=self.user, intent=Intent.DIET_PLAN)
+        res = self.client.get(f"/api/v1/coach/jobs/{job.id}/")
+        self.assertEqual(res.status_code, 401)
+
+    def test_conversation_messages_endpoint_requires_authentication(self):
+        conversation = CoachConversation.objects.create(user=self.user)
+        res = self.client.get(f"/api/v1/coach/conversations/{conversation.id}/messages/")
+        self.assertEqual(res.status_code, 401)

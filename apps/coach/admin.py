@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from apps.coach.models import AgentRun, CoachConversation, CoachMessage
+from apps.coach.models import AgentRun, CoachConversation, CoachJob, CoachMessage
 
 
 class CoachMessageInline(admin.TabularInline):
@@ -40,3 +40,12 @@ class AgentRunAdmin(admin.ModelAdmin):
     )
     list_filter = ("agent", "provider", "approved")
     search_fields = ("conversation__user__email",)
+
+
+@admin.register(CoachJob)
+class CoachJobAdmin(admin.ModelAdmin):
+    list_display = ("id", "user", "intent", "status", "created_at", "updated_at")
+    list_filter = ("intent", "status")
+    search_fields = ("user__email",)
+    autocomplete_fields = ("user",)
+    readonly_fields = ("result", "error", "created_at", "updated_at")

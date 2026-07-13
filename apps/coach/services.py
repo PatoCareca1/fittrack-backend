@@ -8,6 +8,15 @@ def create_conversation(user):
     return CoachConversation.objects.create(user=user)
 
 
+def get_or_create_conversation(user, conversation_id=None):
+    if conversation_id:
+        try:
+            return CoachConversation.objects.get(id=conversation_id, user=user)
+        except CoachConversation.DoesNotExist:
+            raise ValidationError({"conversation_id": "Conversa não encontrada."})
+    return create_conversation(user)
+
+
 def add_message(conversation, role, content, agent=""):
     return CoachMessage.objects.create(
         conversation=conversation, role=role, content=content, agent=agent
