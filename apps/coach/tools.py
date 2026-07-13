@@ -1,9 +1,12 @@
 from django.db.models import Q
 
 from apps.diet.models import Food
+from apps.workouts.models import Exercise
 
 DEFAULT_SEARCH_LIMIT = 10
 MAX_SEARCH_LIMIT = 50
+DEFAULT_EXERCISE_LIMIT = 30
+MAX_EXERCISE_LIMIT = 50
 
 
 def buscar_alimento(user, query: str, limit: int = DEFAULT_SEARCH_LIMIT) -> list[dict]:
@@ -26,6 +29,33 @@ def buscar_alimento(user, query: str, limit: int = DEFAULT_SEARCH_LIMIT) -> list
             "fat_g": float(food.fat_g),
         }
         for food in foods
+    ]
+
+
+def listar_exercicios(
+    muscle_group: str | None = None, limit: int = DEFAULT_EXERCISE_LIMIT
+) -> list[dict]:
+    """Catálogo de exercícios, opcionalmente filtrado por grupo muscular.
+    Só `is_public` — diferente de Food, o model Exercise não tem noção de
+    exercício customizado por usuário, então não há filtro de owner aqui.
+
+    Reaproveitado por apps/coach/mcp/tools.py (mesma consulta, exposta lá
+    como tool MCP para o profissional) — extraído para cá para não manter
+    duas cópias da mesma query."""
+    limit = max(1, min(int(limit or DEFAULT_EXERCISE_LIMIT), MAX_EXERCISE_LIMIT))
+    exercises = Exercise.objects.filter(is_public=True)
+    if muscle_group:
+        exercises = exercises.filter(muscle_group=muscle_group)
+    exercises = exercises.order_by("muscle_group", "name")[:limit]
+    return [
+        {
+            "id": exercise.id,
+            "name": exercise.name,
+            "muscle_group": exercise.muscle_group,
+            "icon_slug": exercise.icon_slug,
+            "description": exercise.description,
+        }
+        for exercise in exercises
     ]
 
 
@@ -57,12 +87,42 @@ DIET_TOOL_SCHEMAS = [
     }
 ]
 
+WORKOUT_TOOL_SCHEMAS = [
+    {
+        "name": "listar_exercicios",
+        "description": (
+            "Lista exercícios do catálogo público do FitTrack, opcionalmente "
+            "filtrados por grupo muscular. Use apenas os exercise_id "
+            "retornados aqui para montar o treino — nunca invente um id."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "muscle_group": {
+                    "type": "string",
+                    "description": "Filtra por grupo muscular, ex.: 'chest', 'back'.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Número máximo de resultados (padrão 30).",
+                },
+            },
+        },
+    }
+]
+
 _TOOLS_BY_NAME = {
     "buscar_alimento": lambda arguments, user: {
         "results": buscar_alimento(
             user,
             arguments.get("query", ""),
             arguments.get("limit", DEFAULT_SEARCH_LIMIT),
+        )
+    },
+    "listar_exercicios": lambda arguments, user: {
+        "results": listar_exercicios(
+            arguments.get("muscle_group"),
+            arguments.get("limit", DEFAULT_EXERCISE_LIMIT),
         )
     },
 }

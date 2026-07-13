@@ -15,8 +15,106 @@ import threading
 from django.db import connection
 
 from apps.coach.agents.diet import generate_and_review_meal_plan
+from apps.coach.agents.workout import generate_and_review_workout_plan
 from apps.coach.models import CoachAgent, CoachJob, CoachJobStatus, Intent, MessageRole
-from apps.coach.services import add_message, create_meal_plan_from_agent
+from apps.coach.services import (
+    add_message,
+    create_meal_plan_from_agent,
+    create_workout_from_agent,
+)
+
+
+def _run_diet_job(job: CoachJob, message: str) -> None:
+    result = generate_and_review_meal_plan(job.user, goal_note=message)
+
+    if result.approved:
+        meal_plan = create_meal_plan_from_agent(job.user, result)
+        job.result = {
+            "meal_plan_id": meal_plan.id,
+            "totals": result.totals,
+            "critic_summary": result.critic_summary,
+            "issues": result.issues,
+            "diet_iterations": result.diet_iterations,
+            "critic_rounds": result.critic_rounds,
+        }
+        rationale = (result.proposal or {}).get("rationale", "")
+        content = "\n\n".join(part for part in (rationale, result.critic_summary) if part)
+        if job.conversation_id:
+            add_message(
+                job.conversation,
+                MessageRole.ASSISTANT,
+                content or "Seu plano alimentar foi gerado com sucesso.",
+                agent=CoachAgent.DIET,
+            )
+    else:
+        # O pipeline rodou até o fim sem erro de sistema — só não
+        # produziu um plano aprovado. Isso é um resultado válido do
+        # job, não uma falha: "failed" fica reservado para exceções.
+        job.result = {
+            "totals": result.totals,
+            "critic_summary": result.critic_summary,
+            "issues": result.issues,
+            "errors": result.errors,
+            "diet_iterations": result.diet_iterations,
+            "critic_rounds": result.critic_rounds,
+        }
+        if job.conversation_id:
+            add_message(
+                job.conversation,
+                MessageRole.ASSISTANT,
+                "Não consegui montar um plano alimentar aprovado desta vez. "
+                "Tente detalhar melhor suas preferências e peça novamente.",
+                agent=CoachAgent.DIET,
+            )
+
+
+def _run_workout_job(job: CoachJob, message: str) -> None:
+    result = generate_and_review_workout_plan(job.user, goal_note=message)
+
+    if result.approved:
+        workout = create_workout_from_agent(job.user, result)
+        job.result = {
+            "workout_id": workout.id,
+            "summary": result.summary,
+            "critic_summary": result.critic_summary,
+            "issues": result.issues,
+            "workout_iterations": result.workout_iterations,
+            "critic_rounds": result.critic_rounds,
+        }
+        rationale = (result.proposal or {}).get("rationale", "")
+        content = "\n\n".join(part for part in (rationale, result.critic_summary) if part)
+        if job.conversation_id:
+            add_message(
+                job.conversation,
+                MessageRole.ASSISTANT,
+                content or "Seu treino foi gerado com sucesso.",
+                agent=CoachAgent.WORKOUT,
+            )
+    else:
+        # Mesmo raciocínio de _run_diet_job: pipeline rodou até o fim sem
+        # erro de sistema, só não aprovou. Resultado válido, não falha.
+        job.result = {
+            "summary": result.summary,
+            "critic_summary": result.critic_summary,
+            "issues": result.issues,
+            "errors": result.errors,
+            "workout_iterations": result.workout_iterations,
+            "critic_rounds": result.critic_rounds,
+        }
+        if job.conversation_id:
+            add_message(
+                job.conversation,
+                MessageRole.ASSISTANT,
+                "Não consegui montar um treino aprovado desta vez. Tente "
+                "detalhar melhor suas preferências e peça novamente.",
+                agent=CoachAgent.WORKOUT,
+            )
+
+
+_JOB_RUNNERS = {
+    Intent.DIET_PLAN: _run_diet_job,
+    Intent.WORKOUT_PLAN: _run_workout_job,
+}
 
 
 def run_plan_job(job_id: int, message: str) -> None:
@@ -30,47 +128,8 @@ def run_plan_job(job_id: int, message: str) -> None:
         job.status = CoachJobStatus.RUNNING
         job.save(update_fields=["status", "updated_at"])
 
-        result = generate_and_review_meal_plan(job.user, goal_note=message)
-
-        if result.approved:
-            meal_plan = create_meal_plan_from_agent(job.user, result)
-            job.result = {
-                "meal_plan_id": meal_plan.id,
-                "totals": result.totals,
-                "critic_summary": result.critic_summary,
-                "issues": result.issues,
-                "diet_iterations": result.diet_iterations,
-                "critic_rounds": result.critic_rounds,
-            }
-            rationale = (result.proposal or {}).get("rationale", "")
-            content = "\n\n".join(part for part in (rationale, result.critic_summary) if part)
-            if job.conversation_id:
-                add_message(
-                    job.conversation,
-                    MessageRole.ASSISTANT,
-                    content or "Seu plano alimentar foi gerado com sucesso.",
-                    agent=CoachAgent.DIET,
-                )
-        else:
-            # O pipeline rodou até o fim sem erro de sistema — só não
-            # produziu um plano aprovado. Isso é um resultado válido do
-            # job, não uma falha: "failed" fica reservado para exceções.
-            job.result = {
-                "totals": result.totals,
-                "critic_summary": result.critic_summary,
-                "issues": result.issues,
-                "errors": result.errors,
-                "diet_iterations": result.diet_iterations,
-                "critic_rounds": result.critic_rounds,
-            }
-            if job.conversation_id:
-                add_message(
-                    job.conversation,
-                    MessageRole.ASSISTANT,
-                    "Não consegui montar um plano alimentar aprovado desta vez. "
-                    "Tente detalhar melhor suas preferências e peça novamente.",
-                    agent=CoachAgent.DIET,
-                )
+        run_job = _JOB_RUNNERS[job.intent]
+        run_job(job, message)
 
         job.status = CoachJobStatus.SUCCEEDED
         job.save(update_fields=["status", "result", "updated_at"])
@@ -88,11 +147,13 @@ def _run_plan_job_in_thread(job_id: int, message: str) -> None:
         connection.close()
 
 
-def enqueue_plan_job(user, message: str, conversation=None) -> CoachJob:
+def enqueue_plan_job(
+    user, message: str, intent: str = Intent.DIET_PLAN, conversation=None
+) -> CoachJob:
     job = CoachJob.objects.create(
         user=user,
         conversation=conversation,
-        intent=Intent.DIET_PLAN,
+        intent=intent,
         status=CoachJobStatus.PENDING,
     )
     thread = threading.Thread(target=_run_plan_job_in_thread, args=(job.id, message), daemon=True)

@@ -80,3 +80,37 @@ def create_meal_plan_from_agent(user, result, name="Plano gerado pelo FitTrack C
         serializer = MealPlanSerializer(data=data)
         serializer.is_valid(raise_exception=True)
         return serializer.save(user=user)
+
+
+def create_workout_from_agent(user, result, name=None):
+    """Persiste um workouts.Workout a partir de um WorkoutAgentResult
+    aprovado. Reaproveita o WorkoutSerializer do app workouts para não
+    duplicar a lógica de criação de WorkoutExercise — espelha
+    create_meal_plan_from_agent."""
+    if not result.approved or not result.proposal:
+        raise ValidationError("Só é possível salvar um treino aprovado pelo agente.")
+
+    from apps.workouts.serializers import WorkoutSerializer
+
+    proposal = result.proposal
+    data = {
+        "name": name or proposal.get("name") or "Treino gerado pelo FitTrack Coach",
+        "description": proposal.get("rationale", ""),
+        "exercises": [
+            {
+                "exercise": exercise["exercise_id"],
+                "order": exercise["order"],
+                "sets": exercise["sets"],
+                "reps": exercise["reps"],
+                "duration_seconds": exercise["duration_seconds"],
+                "load_kg": exercise["load_kg"],
+                "rest_seconds": exercise["rest_seconds"],
+            }
+            for exercise in proposal["exercises"]
+        ],
+    }
+
+    with transaction.atomic():
+        serializer = WorkoutSerializer(data=data)
+        serializer.is_valid(raise_exception=True)
+        return serializer.save(user=user)

@@ -1,20 +1,17 @@
-import time
 from dataclasses import dataclass, field
 
 from django.conf import settings
 from rest_framework.exceptions import ValidationError
 
 from apps.body.models import BodyMetric
+from apps.coach.agents._loop import run_generation_loop
 from apps.coach.agents.critic import CriticResult, review_meal_plan
-from apps.coach.agents.utils import usage_tokens
 from apps.coach.models import AgentRun, CoachAgent
 from apps.coach.providers.registry import get_provider
 from apps.coach.schemas import parse_diet_output
 from apps.coach.services import record_agent_run
 from apps.coach.tools import DIET_TOOL_SCHEMAS, execute_tool
 from apps.coach.validators import compute_totals, validate_meal_plan
-
-MAX_TOOL_ROUNDS = 6
 
 DIET_AGENT_SYSTEM_PROMPT = """Você é o Agente de Dieta do FitTrack, especialista em nutrição esportiva.
 Sua função é montar um plano alimentar para o aluno, usando os alimentos
@@ -72,36 +69,6 @@ def _get_latest_metric(user) -> BodyMetric:
     return metric
 
 
-def _run_provider_until_text(provider, system: str, messages: list[dict], user):
-    """Chama o provider, resolvendo tool_calls até ele produzir uma resposta
-    final em texto (ou estourar o limite de segurança de rodadas)."""
-    input_tokens = 0
-    output_tokens = 0
-    for _ in range(MAX_TOOL_ROUNDS):
-        response = provider.complete(system=system, messages=messages, tools=DIET_TOOL_SCHEMAS)
-        input_tokens += usage_tokens(response.usage, ("input_tokens", "promptTokenCount"))
-        output_tokens += usage_tokens(response.usage, ("output_tokens", "candidatesTokenCount"))
-
-        if not response.tool_calls:
-            return response, input_tokens, output_tokens
-
-        messages.append(
-            {"role": "assistant", "content": response.text, "tool_calls": response.tool_calls}
-        )
-        for tool_call in response.tool_calls:
-            result = execute_tool(tool_call.name, tool_call.arguments, user)
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "name": tool_call.name,
-                    "content": result,
-                }
-            )
-
-    raise RuntimeError("Excesso de chamadas de ferramenta sem produzir uma resposta final.")
-
-
 def generate_meal_plan(user, goal_note: str = "") -> DietAgentResult:
     metric = _get_latest_metric(user)
 
@@ -116,66 +83,39 @@ def generate_meal_plan(user, goal_note: str = "") -> DietAgentResult:
     provider_name = settings.COACH_GENERATOR_PROVIDER
     provider = get_provider(provider_name)
 
-    messages = [{"role": "user", "content": goal_note or "Monte meu plano alimentar."}]
+    loop_result = run_generation_loop(
+        user=user,
+        provider=provider,
+        system=system,
+        initial_message=goal_note or "Monte meu plano alimentar.",
+        tools=DIET_TOOL_SCHEMAS,
+        execute_tool=execute_tool,
+        parse_output=parse_diet_output,
+        validate_output=lambda proposal: validate_meal_plan(proposal, metric, user),
+        max_iterations=settings.COACH_MAX_ITERATIONS,
+    )
 
-    proposal = None
-    totals = None
-    errors: list[str] = []
-    input_tokens = 0
-    output_tokens = 0
-    iterations = 0
-    started = time.monotonic()
-
-    for iterations in range(1, settings.COACH_MAX_ITERATIONS + 1):
-        response, in_tok, out_tok = _run_provider_until_text(provider, system, messages, user)
-        input_tokens += in_tok
-        output_tokens += out_tok
-        messages.append({"role": "assistant", "content": response.text})
-
-        try:
-            proposal = parse_diet_output(response.text or "")
-            errors = validate_meal_plan(proposal, metric, user)
-        except ValueError as exc:
-            proposal = None
-            errors = [f"A resposta não é um JSON válido no formato esperado: {exc}"]
-
-        if not errors:
-            totals = compute_totals(proposal)
-            break
-
-        proposal = None
-        messages.append(
-            {
-                "role": "user",
-                "content": (
-                    "Sua proposta foi rejeitada pelos seguintes motivos: "
-                    + " ".join(errors)
-                    + " Corrija e responda novamente apenas com o JSON no formato especificado."
-                ),
-            }
-        )
-
-    latency_ms = int((time.monotonic() - started) * 1000)
-    approved = not errors
+    approved = not loop_result.errors
+    totals = compute_totals(loop_result.proposal) if approved else None
 
     agent_run = record_agent_run(
         agent=CoachAgent.DIET,
         provider=provider_name,
         model=getattr(provider, "model", ""),
-        iterations=iterations,
-        validation_errors=errors,
+        iterations=loop_result.iterations,
+        validation_errors=loop_result.errors,
         approved=approved,
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        latency_ms=latency_ms,
+        input_tokens=loop_result.input_tokens,
+        output_tokens=loop_result.output_tokens,
+        latency_ms=loop_result.latency_ms,
     )
 
     return DietAgentResult(
         approved=approved,
-        proposal=proposal if approved else None,
-        errors=errors,
+        proposal=loop_result.proposal if approved else None,
+        errors=loop_result.errors,
         totals=totals if approved else None,
-        iterations=iterations,
+        iterations=loop_result.iterations,
         agent_run=agent_run,
     )
 

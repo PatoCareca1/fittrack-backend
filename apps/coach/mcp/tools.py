@@ -4,9 +4,9 @@ from rest_framework.exceptions import ValidationError
 from apps.body.models import BodyMetric
 from apps.coach.mcp.permissions import get_active_link_or_error, require_nutritionist
 from apps.coach.tools import buscar_alimento as _buscar_alimento_catalogo
+from apps.coach.tools import listar_exercicios as _listar_exercicios_catalogo
 from apps.coach.validators import validate_meal_plan
 from apps.professional.models import DietAssignment, LinkStatus, ProfessionalLink
-from apps.workouts.models import Exercise
 
 # Schemas neutros no mesmo formato usado em apps/coach/tools.py
 # (name/description/inputSchema em JSON Schema puro) — o host MCP usa isto
@@ -165,20 +165,11 @@ def buscar_alimento(user, arguments: dict) -> list[dict]:
 
 
 def listar_exercicios(user, arguments: dict) -> list[dict]:
-    qs = Exercise.objects.filter(is_public=True)
-    muscle_group = arguments.get("muscle_group")
-    if muscle_group:
-        qs = qs.filter(muscle_group=muscle_group)
-    return [
-        {
-            "id": exercise.id,
-            "name": exercise.name,
-            "muscle_group": exercise.muscle_group,
-            "icon_slug": exercise.icon_slug,
-            "description": exercise.description,
-        }
-        for exercise in qs
-    ]
+    # Reaproveita a mesma consulta usada pelo Agente de Treino interno
+    # (apps/coach/tools.py) — não duplicamos a lógica de catálogo aqui.
+    return _listar_exercicios_catalogo(
+        arguments.get("muscle_group"), arguments.get("limit", 30)
+    )
 
 
 def criar_plano_alimentar(user, arguments: dict) -> dict:

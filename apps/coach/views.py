@@ -10,10 +10,6 @@ from apps.coach.models import CoachConversation, CoachJob, Intent, MessageRole
 from apps.coach.runner import enqueue_plan_job
 from apps.coach.serializers import CoachJobSerializer, CoachMessageSerializer
 
-WORKOUT_UNAVAILABLE_MESSAGE = (
-    "Ainda não tenho um agente de treino disponível. Em breve você vai poder "
-    "pedir um plano de treino por aqui também."
-)
 OUT_OF_SCOPE_MESSAGE = (
     "Esse assunto está fora do que posso ajudar por aqui. Se for algo sobre "
     "sua saúde, treino ou dieta que precise de acompanhamento próximo, "
@@ -25,15 +21,17 @@ AMBIGUOUS_MESSAGE = (
 )
 
 _REPLY_BY_INTENT = {
-    Intent.WORKOUT_PLAN: WORKOUT_UNAVAILABLE_MESSAGE,
     Intent.OUT_OF_SCOPE: OUT_OF_SCOPE_MESSAGE,
     Intent.AMBIGUOUS: AMBIGUOUS_MESSAGE,
 }
 
+_JOB_INTENTS = (Intent.DIET_PLAN, Intent.WORKOUT_PLAN)
+
 
 class CoachMessageView(APIView):
     """POST /api/v1/coach/messages/ — recebe a mensagem do aluno, roteia via
-    Agente Gerente e, para pedido de dieta, dispara o job assíncrono."""
+    Agente Gerente e, para pedido de dieta ou treino, dispara o job
+    assíncrono correspondente."""
 
     permission_classes = [IsAuthenticated]
 
@@ -49,8 +47,8 @@ class CoachMessageView(APIView):
 
         intent = route(message)
 
-        if intent == Intent.DIET_PLAN:
-            job = enqueue_plan_job(request.user, message, conversation=conversation)
+        if intent in _JOB_INTENTS:
+            job = enqueue_plan_job(request.user, message, intent=intent, conversation=conversation)
             return Response(
                 {
                     "job_id": job.id,

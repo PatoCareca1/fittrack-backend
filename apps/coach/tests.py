@@ -7,9 +7,10 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.test import APIClient
 
 from apps.body.models import BodyMetric
-from apps.coach.agents.critic import review_meal_plan
+from apps.coach.agents.critic import review_meal_plan, review_workout_plan
 from apps.coach.agents.diet import generate_and_review_meal_plan, generate_meal_plan
 from apps.coach.agents.manager import route
+from apps.coach.agents.workout import generate_and_review_workout_plan, generate_workout_plan
 from apps.coach.models import (
     AgentRun,
     CoachAgent,
@@ -25,9 +26,15 @@ from apps.coach.providers.base import LLMResponse
 from apps.coach.providers.gemini_provider import GeminiProvider
 from apps.coach.providers.registry import get_provider
 from apps.coach.runner import run_plan_job
-from apps.coach.validators import compute_totals, validate_meal_plan
+from apps.coach.validators import (
+    compute_totals,
+    summarize_workout,
+    validate_meal_plan,
+    validate_workout_plan,
+)
 from apps.diet.models import Food, FoodSource, MealPlan
 from apps.users.models import User
+from apps.workouts.models import Exercise, MuscleGroup, Workout
 
 
 class ProviderRegistryTests(TestCase):
@@ -175,6 +182,55 @@ class DietFixturesMixin:
         }
 
 
+class WorkoutFixturesMixin:
+    def _make_exercises(self):
+        self.squat = Exercise.objects.create(
+            name="Agachamento livre", muscle_group=MuscleGroup.QUADS,
+            icon_slug="agachamento-livre-coach-test",
+        )
+        self.bench = Exercise.objects.create(
+            name="Supino reto", muscle_group=MuscleGroup.CHEST,
+            icon_slug="supino-reto-coach-test",
+        )
+        self.row = Exercise.objects.create(
+            name="Remada curvada", muscle_group=MuscleGroup.BACK,
+            icon_slug="remada-curvada-coach-test",
+        )
+        self.plank = Exercise.objects.create(
+            name="Prancha", muscle_group=MuscleGroup.CORE,
+            icon_slug="prancha-coach-test",
+        )
+
+    def _valid_workout_proposal(self, extra_exercise_fields=None):
+        extra = extra_exercise_fields or {}
+        return {
+            "name": "Treino full body",
+            "exercises": [
+                {
+                    "exercise_id": self.squat.id, "order": 1, "sets": 3,
+                    "reps": 10, "duration_seconds": None, "load_kg": None,
+                    "rest_seconds": 60, **extra,
+                },
+                {
+                    "exercise_id": self.bench.id, "order": 2, "sets": 3,
+                    "reps": 10, "duration_seconds": None, "load_kg": None,
+                    "rest_seconds": 60, **extra,
+                },
+                {
+                    "exercise_id": self.row.id, "order": 3, "sets": 3,
+                    "reps": 10, "duration_seconds": None, "load_kg": None,
+                    "rest_seconds": 60, **extra,
+                },
+                {
+                    "exercise_id": self.plank.id, "order": 4, "sets": 3,
+                    "reps": None, "duration_seconds": 30, "load_kg": None,
+                    "rest_seconds": 45, **extra,
+                },
+            ],
+            "rationale": "Treino balanceado para o objetivo do aluno.",
+        }
+
+
 class ValidateMealPlanTests(DietFixturesMixin, TestCase):
     def setUp(self):
         self.user = User.objects.create_user(email="aluno@test.dev", password="x")
@@ -236,6 +292,69 @@ class ComputeTotalsTests(TestCase):
         self.assertEqual(totals["protein_g"], 26.0)
         self.assertEqual(totals["carbs_g"], 2.2)
         self.assertEqual(totals["fat_g"], 22.0)
+
+
+class ValidateWorkoutPlanTests(WorkoutFixturesMixin, TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(email="aluno@test.dev", password="x")
+        self._make_exercises()
+        self.profile = self.user.profile
+
+    def test_approves_correct_plan(self):
+        errors = validate_workout_plan(self._valid_workout_proposal(), self.profile, self.user)
+        self.assertEqual(errors, [])
+
+    def test_rejects_nonexistent_exercise_id(self):
+        proposal = self._valid_workout_proposal()
+        proposal["exercises"][0]["exercise_id"] = 999999
+        errors = validate_workout_plan(proposal, self.profile, self.user)
+        self.assertTrue(any("999999" in error for error in errors))
+
+    def test_rejects_duplicate_order(self):
+        proposal = self._valid_workout_proposal()
+        proposal["exercises"][1]["order"] = 1
+        errors = validate_workout_plan(proposal, self.profile, self.user)
+        self.assertTrue(any("order" in error for error in errors))
+
+    def test_rejects_reps_out_of_range(self):
+        proposal = self._valid_workout_proposal()
+        proposal["exercises"][0]["reps"] = 50
+        errors = validate_workout_plan(proposal, self.profile, self.user)
+        self.assertTrue(any("reps=50" in error for error in errors))
+
+    def test_rejects_both_reps_and_duration_filled(self):
+        proposal = self._valid_workout_proposal()
+        proposal["exercises"][0]["duration_seconds"] = 30  # já tinha reps=10
+        errors = validate_workout_plan(proposal, self.profile, self.user)
+        self.assertTrue(any("reps E duration_seconds" in error for error in errors))
+
+    def test_rejects_neither_reps_nor_duration_filled(self):
+        proposal = self._valid_workout_proposal()
+        proposal["exercises"][0]["reps"] = None
+        errors = validate_workout_plan(proposal, self.profile, self.user)
+        self.assertTrue(any("não tem reps nem duration_seconds" in error for error in errors))
+
+    def test_rejects_exercise_repeated_too_many_times(self):
+        proposal = self._valid_workout_proposal()
+        for exercise in proposal["exercises"]:
+            exercise["exercise_id"] = self.squat.id
+        errors = validate_workout_plan(proposal, self.profile, self.user)
+        self.assertTrue(any(str(self.squat.id) in error and "aparecem mais" in error for error in errors))
+
+
+class SummarizeWorkoutTests(WorkoutFixturesMixin, TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(email="aluno@test.dev", password="x")
+        self._make_exercises()
+
+    def test_summarize_counts_exercises_sets_and_muscle_groups(self):
+        summary = summarize_workout(self._valid_workout_proposal())
+        self.assertEqual(summary["exercise_count"], 4)
+        self.assertEqual(summary["total_sets"], 12)
+        self.assertEqual(
+            summary["muscle_groups"],
+            sorted([MuscleGroup.QUADS, MuscleGroup.CHEST, MuscleGroup.BACK, MuscleGroup.CORE]),
+        )
 
 
 class DietAgentTests(DietFixturesMixin, TestCase):
@@ -312,6 +431,58 @@ class DietAgentTests(DietFixturesMixin, TestCase):
         other = User.objects.create_user(email="sem-metrica@test.dev", password="x")
         with self.assertRaises(ValidationError):
             generate_meal_plan(other)
+
+
+class WorkoutAgentTests(WorkoutFixturesMixin, TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(email="aluno@test.dev", password="x")
+        self._make_exercises()
+
+    def _invalid_proposal_json(self):
+        proposal = self._valid_workout_proposal()
+        proposal["exercises"][1]["order"] = 1  # order duplicado -> reprovado
+        return json.dumps(proposal)
+
+    def _valid_proposal_json(self):
+        return json.dumps(self._valid_workout_proposal())
+
+    @patch("apps.coach.agents.workout.get_provider")
+    def test_agent_retries_after_invalid_proposal_and_approves_second(self, mock_get_provider):
+        provider = MagicMock()
+        provider.model = "claude-sonnet-4-5"
+        provider.complete.side_effect = [
+            LLMResponse(text=self._invalid_proposal_json(), tool_calls=[], usage={"input_tokens": 10, "output_tokens": 5}),
+            LLMResponse(text=self._valid_proposal_json(), tool_calls=[], usage={"input_tokens": 10, "output_tokens": 5}),
+        ]
+        mock_get_provider.return_value = provider
+
+        result = generate_workout_plan(self.user)
+
+        self.assertTrue(result.approved)
+        self.assertEqual(result.iterations, 2)
+        self.assertIsNotNone(result.proposal)
+        self.assertEqual(provider.complete.call_count, 2)
+        self.assertEqual(AgentRun.objects.filter(agent=CoachAgent.WORKOUT).count(), 1)
+        self.assertTrue(result.agent_run.approved)
+        self.assertEqual(result.agent_run.iterations, 2)
+
+    @override_settings(COACH_MAX_ITERATIONS=2)
+    @patch("apps.coach.agents.workout.get_provider")
+    def test_agent_stops_at_max_iterations_when_never_valid(self, mock_get_provider):
+        provider = MagicMock()
+        provider.model = "claude-sonnet-4-5"
+        provider.complete.side_effect = [
+            LLMResponse(text=self._invalid_proposal_json(), tool_calls=[], usage={}),
+            LLMResponse(text=self._invalid_proposal_json(), tool_calls=[], usage={}),
+        ]
+        mock_get_provider.return_value = provider
+
+        result = generate_workout_plan(self.user)
+
+        self.assertFalse(result.approved)
+        self.assertEqual(result.iterations, 2)
+        self.assertIsNone(result.proposal)
+        self.assertTrue(result.errors)
 
 
 def _good_critic_response(summary="Plano equilibrado."):
@@ -424,6 +595,60 @@ class CriticAgentTests(DietFixturesMixin, TestCase):
         self.assertNotIn('"food_id"', content)
 
 
+class WorkoutCriticTests(WorkoutFixturesMixin, TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(email="aluno@test.dev", password="x")
+        self._make_exercises()
+        self.proposal = self._valid_workout_proposal()
+        self.summary = summarize_workout(self.proposal)
+        self.profile = self.user.profile
+
+    @patch("apps.coach.agents.critic.get_provider")
+    def test_approves_good_plan(self, mock_get_provider):
+        provider = MagicMock()
+        provider.model = "gemini-2.5-flash"
+        provider.complete.return_value = _good_critic_response()
+        mock_get_provider.return_value = provider
+
+        result = review_workout_plan(self.user, self.proposal, self.summary, self.profile)
+
+        self.assertTrue(result.approved)
+        self.assertEqual(result.issues, [])
+        self.assertEqual(AgentRun.objects.filter(agent=CoachAgent.CRITIC).count(), 1)
+
+    @patch("apps.coach.agents.critic.get_provider")
+    def test_blocker_issue_rejects_even_if_llm_says_approved_true(self, mock_get_provider):
+        provider = MagicMock()
+        provider.model = "gemini-2.5-flash"
+        provider.complete.return_value = _blocker_critic_response(
+            message="Treino ignora completamente membros inferiores.", llm_approved=True
+        )
+        mock_get_provider.return_value = provider
+
+        result = review_workout_plan(self.user, self.proposal, self.summary, self.profile)
+
+        self.assertFalse(result.approved)
+        self.assertTrue(any(issue["severity"] == "blocker" for issue in result.issues))
+        self.assertTrue(
+            any("Divergência" in message for message in result.agent_run.validation_errors)
+        )
+
+    @patch("apps.coach.agents.critic.get_provider")
+    def test_prompt_includes_exercise_names_not_only_ids(self, mock_get_provider):
+        provider = MagicMock()
+        provider.model = "gemini-2.5-flash"
+        provider.complete.return_value = _good_critic_response()
+        mock_get_provider.return_value = provider
+
+        review_workout_plan(self.user, self.proposal, self.summary, self.profile)
+
+        _, kwargs = provider.complete.call_args
+        content = kwargs["messages"][0]["content"]
+        self.assertIn(self.squat.name, content)
+        self.assertIn(self.bench.name, content)
+        self.assertNotIn('"exercise_id"', content)
+
+
 class CoachedPipelineTests(DietFixturesMixin, TestCase):
     def setUp(self):
         self.user = User.objects.create_user(email="aluno@test.dev", password="x")
@@ -517,13 +742,13 @@ class CoachedPipelineTests(DietFixturesMixin, TestCase):
         mock_critic_provider.assert_not_called()
 
 
-def _synchronous_enqueue_plan_job(user, message, conversation=None):
+def _synchronous_enqueue_plan_job(user, message, intent=Intent.DIET_PLAN, conversation=None):
     """Substitui runner.enqueue_plan_job nos testes de view: cria o job e
     chama run_plan_job() diretamente, na mesma thread — sem passar por
     threading.Thread, que fecharia a conexão de banco compartilhada pelo
     TestCase ao final da execução."""
     job = CoachJob.objects.create(
-        user=user, conversation=conversation, intent=Intent.DIET_PLAN, status=CoachJobStatus.PENDING
+        user=user, conversation=conversation, intent=intent, status=CoachJobStatus.PENDING
     )
     run_plan_job(job.id, message)
     return job
@@ -580,10 +805,11 @@ class ManagerRouteTests(TestCase):
         self.assertTrue(run.validation_errors)
 
 
-class CoachMessageViewTests(DietFixturesMixin, TestCase):
+class CoachMessageViewTests(DietFixturesMixin, WorkoutFixturesMixin, TestCase):
     def setUp(self):
         self.user = User.objects.create_user(email="aluno@test.dev", password="x")
         self._make_foods()
+        self._make_exercises()
         self.metric = _make_metric(self.user)
         self.client = APIClient()
 
@@ -625,15 +851,37 @@ class CoachMessageViewTests(DietFixturesMixin, TestCase):
         self.assertEqual(job.status, CoachJobStatus.SUCCEEDED)
         self.assertEqual(MealPlan.objects.filter(user=self.user).count(), 1)
 
-    @patch("apps.coach.agents.manager.get_provider")
-    def test_workout_message_returns_200_with_unavailable_notice(self, mock_get_provider):
+    @patch("apps.coach.views.enqueue_plan_job", side_effect=_synchronous_enqueue_plan_job)
+    @patch("apps.coach.agents.critic.get_provider")
+    @patch("apps.coach.agents.workout.get_provider")
+    def test_workout_message_returns_202_and_job_ends_succeeded(
+        self, mock_workout_provider, mock_critic_provider, mock_enqueue
+    ):
+        workout_provider = MagicMock()
+        workout_provider.model = "claude-sonnet-4-5"
+        workout_provider.complete.return_value = LLMResponse(
+            text=json.dumps(self._valid_workout_proposal()), tool_calls=[], usage={}
+        )
+        mock_workout_provider.return_value = workout_provider
+
+        critic_provider = MagicMock()
+        critic_provider.model = "gemini-2.5-flash"
+        critic_provider.complete.return_value = _good_critic_response()
+        mock_critic_provider.return_value = critic_provider
+
         self.client.force_authenticate(self.user)
         res = self.client.post(
             "/api/v1/coach/messages/", {"message": "Quero uma ficha de treino"}, format="json"
         )
-        self.assertEqual(res.status_code, 200)
+
+        self.assertEqual(res.status_code, 202)
+        self.assertIn("job_id", res.data)
         self.assertEqual(res.data["intent"], Intent.WORKOUT_PLAN)
-        mock_get_provider.assert_not_called()
+
+        job = CoachJob.objects.get(id=res.data["job_id"])
+        self.assertEqual(job.user, self.user)
+        self.assertEqual(job.status, CoachJobStatus.SUCCEEDED)
+        self.assertEqual(Workout.objects.filter(user=self.user).count(), 1)
 
     @patch("apps.coach.agents.manager.get_provider")
     def test_out_of_scope_message_returns_200_polite_refusal(self, mock_get_provider):
@@ -654,11 +902,12 @@ class CoachMessageViewTests(DietFixturesMixin, TestCase):
         self.assertEqual(res.data["intent"], Intent.OUT_OF_SCOPE)
 
 
-class CoachJobAndConversationApiTests(DietFixturesMixin, TestCase):
+class CoachJobAndConversationApiTests(DietFixturesMixin, WorkoutFixturesMixin, TestCase):
     def setUp(self):
         self.user = User.objects.create_user(email="aluno@test.dev", password="x")
         self.other = User.objects.create_user(email="outro@test.dev", password="x")
         self._make_foods()
+        self._make_exercises()
         self.metric = _make_metric(self.user)
         self.client = APIClient()
 
@@ -721,6 +970,66 @@ class CoachJobAndConversationApiTests(DietFixturesMixin, TestCase):
         self.assertEqual(job.status, CoachJobStatus.SUCCEEDED)
         self.assertEqual(MealPlan.objects.count(), 0)
         self.assertIsNone(job.result.get("meal_plan_id"))
+        self.assertTrue(job.result.get("errors"))
+        mock_critic_provider.assert_not_called()
+
+    def test_workout_job_full_flow_succeeded_persists_workout_for_owner(self):
+        job = CoachJob.objects.create(user=self.user, intent=Intent.WORKOUT_PLAN)
+
+        with (
+            patch("apps.coach.agents.workout.get_provider") as mock_workout_provider,
+            patch("apps.coach.agents.critic.get_provider") as mock_critic_provider,
+        ):
+            workout_provider = MagicMock()
+            workout_provider.model = "claude-sonnet-4-5"
+            workout_provider.complete.return_value = LLMResponse(
+                text=json.dumps(self._valid_workout_proposal()), tool_calls=[], usage={}
+            )
+            mock_workout_provider.return_value = workout_provider
+
+            critic_provider = MagicMock()
+            critic_provider.model = "gemini-2.5-flash"
+            critic_provider.complete.return_value = _good_critic_response()
+            mock_critic_provider.return_value = critic_provider
+
+            run_plan_job(job.id, "Quero um treino")  # síncrono, sem thread
+
+        job.refresh_from_db()
+        self.assertEqual(job.status, CoachJobStatus.SUCCEEDED)
+        workout = Workout.objects.get(id=job.result["workout_id"])
+        self.assertEqual(workout.user, self.user)
+
+        self.client.force_authenticate(self.user)
+        res = self.client.get(f"/api/v1/coach/jobs/{job.id}/")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["status"], CoachJobStatus.SUCCEEDED)
+        self.assertIsNotNone(res.data["workout"])
+        self.assertEqual(res.data["workout"]["id"], workout.id)
+
+    def test_workout_job_rejected_by_validation_has_no_workout_but_exposes_errors(self):
+        job = CoachJob.objects.create(user=self.user, intent=Intent.WORKOUT_PLAN)
+
+        proposal = self._valid_workout_proposal()
+        proposal["exercises"][1]["order"] = 1  # order duplicado -> reprovado na validação
+
+        with (
+            patch("apps.coach.agents.workout.get_provider") as mock_workout_provider,
+            patch("apps.coach.agents.critic.get_provider") as mock_critic_provider,
+        ):
+            workout_provider = MagicMock()
+            workout_provider.model = "claude-sonnet-4-5"
+            workout_provider.complete.return_value = LLMResponse(
+                text=json.dumps(proposal), tool_calls=[], usage={}
+            )
+            mock_workout_provider.return_value = workout_provider
+            mock_critic_provider.return_value = MagicMock()
+
+            run_plan_job(job.id, "Quero um treino")
+
+        job.refresh_from_db()
+        self.assertEqual(job.status, CoachJobStatus.SUCCEEDED)
+        self.assertEqual(Workout.objects.count(), 0)
+        self.assertIsNone(job.result.get("workout_id"))
         self.assertTrue(job.result.get("errors"))
         mock_critic_provider.assert_not_called()
 
