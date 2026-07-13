@@ -36,7 +36,7 @@ DIET_PLAN_JSON_SCHEMA = {
 }
 
 
-def _strip_code_fences(raw: str) -> str:
+def strip_code_fences(raw: str) -> str:
     text = raw.strip()
     if not text.startswith("```"):
         return text
@@ -92,7 +92,7 @@ def parse_diet_output(raw: str) -> dict:
     """Parse defensivo da resposta do agente de dieta: tolera cercas de
     markdown e valida a forma mínima do contrato. Levanta ValueError com
     mensagem clara em caso de resposta malformada."""
-    text = _strip_code_fences(raw or "")
+    text = strip_code_fences(raw or "")
     if not text:
         raise ValueError("Resposta vazia.")
 

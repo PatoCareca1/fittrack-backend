@@ -1,18 +1,20 @@
 import json
 from unittest.mock import MagicMock, patch
 
+from django.conf import settings
 from django.test import TestCase, override_settings
 from rest_framework.exceptions import ValidationError
 
 from apps.body.models import BodyMetric
-from apps.coach.agents.diet import generate_meal_plan
+from apps.coach.agents.critic import review_meal_plan
+from apps.coach.agents.diet import generate_and_review_meal_plan, generate_meal_plan
 from apps.coach.models import AgentRun, CoachAgent, CoachConversation, CoachMessage, MessageRole
 from apps.coach.providers.anthropic_provider import AnthropicProvider
 from apps.coach.providers.base import LLMResponse
 from apps.coach.providers.gemini_provider import GeminiProvider
 from apps.coach.providers.registry import get_provider
 from apps.coach.validators import compute_totals, validate_meal_plan
-from apps.diet.models import Food, FoodSource
+from apps.diet.models import Food, FoodSource, MealPlan
 from apps.users.models import User
 
 
@@ -298,3 +300,206 @@ class DietAgentTests(DietFixturesMixin, TestCase):
         other = User.objects.create_user(email="sem-metrica@test.dev", password="x")
         with self.assertRaises(ValidationError):
             generate_meal_plan(other)
+
+
+def _good_critic_response(summary="Plano equilibrado."):
+    return LLMResponse(
+        text=json.dumps({"approved": True, "issues": [], "summary": summary}),
+        tool_calls=[],
+        usage={"input_tokens": 5, "output_tokens": 5},
+    )
+
+
+def _blocker_critic_response(
+    message="Refeição com 900g de um único alimento não é realista.",
+    meal_order=1,
+    llm_approved=True,
+    summary="Precisa de ajustes.",
+):
+    return LLMResponse(
+        text=json.dumps(
+            {
+                "approved": llm_approved,
+                "issues": [{"severity": "blocker", "message": message, "meal_order": meal_order}],
+                "summary": summary,
+            }
+        ),
+        tool_calls=[],
+        usage={},
+    )
+
+
+def _warning_critic_response(
+    message="Pouca variedade de vegetais.", llm_approved=False, summary="Ok com ressalvas."
+):
+    return LLMResponse(
+        text=json.dumps(
+            {
+                "approved": llm_approved,
+                "issues": [{"severity": "warning", "message": message, "meal_order": None}],
+                "summary": summary,
+            }
+        ),
+        tool_calls=[],
+        usage={},
+    )
+
+
+class CriticAgentTests(DietFixturesMixin, TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(email="aluno@test.dev", password="x")
+        self._make_foods()
+        self.metric = _make_metric(self.user)
+        self.proposal = self._valid_proposal()
+        self.totals = compute_totals(self.proposal)
+
+    @patch("apps.coach.agents.critic.get_provider")
+    def test_approves_good_plan(self, mock_get_provider):
+        provider = MagicMock()
+        provider.model = "gemini-2.5-flash"
+        provider.complete.return_value = _good_critic_response()
+        mock_get_provider.return_value = provider
+
+        result = review_meal_plan(self.user, self.proposal, self.totals, self.metric)
+
+        self.assertTrue(result.approved)
+        self.assertEqual(result.issues, [])
+        self.assertEqual(AgentRun.objects.filter(agent=CoachAgent.CRITIC).count(), 1)
+        self.assertEqual(result.agent_run.provider, settings.COACH_CRITIC_PROVIDER)
+
+    @patch("apps.coach.agents.critic.get_provider")
+    def test_blocker_issue_rejects_even_if_llm_says_approved_true(self, mock_get_provider):
+        provider = MagicMock()
+        provider.model = "gemini-2.5-flash"
+        provider.complete.return_value = _blocker_critic_response(llm_approved=True)
+        mock_get_provider.return_value = provider
+
+        result = review_meal_plan(self.user, self.proposal, self.totals, self.metric)
+
+        self.assertFalse(result.approved)
+        self.assertTrue(any(issue["severity"] == "blocker" for issue in result.issues))
+        self.assertTrue(
+            any("Divergência" in message for message in result.agent_run.validation_errors)
+        )
+
+    @patch("apps.coach.agents.critic.get_provider")
+    def test_warning_only_does_not_reject(self, mock_get_provider):
+        provider = MagicMock()
+        provider.model = "gemini-2.5-flash"
+        provider.complete.return_value = _warning_critic_response(llm_approved=False)
+        mock_get_provider.return_value = provider
+
+        result = review_meal_plan(self.user, self.proposal, self.totals, self.metric)
+
+        self.assertTrue(result.approved)
+        self.assertEqual(len(result.issues), 1)
+        self.assertEqual(result.issues[0]["severity"], "warning")
+
+    @patch("apps.coach.agents.critic.get_provider")
+    def test_prompt_includes_food_names_not_only_ids(self, mock_get_provider):
+        provider = MagicMock()
+        provider.model = "gemini-2.5-flash"
+        provider.complete.return_value = _good_critic_response()
+        mock_get_provider.return_value = provider
+
+        review_meal_plan(self.user, self.proposal, self.totals, self.metric)
+
+        _, kwargs = provider.complete.call_args
+        content = kwargs["messages"][0]["content"]
+        self.assertIn(self.protein_food.name, content)
+        self.assertIn(self.carb_food.name, content)
+        self.assertIn(self.fat_food.name, content)
+        self.assertNotIn('"food_id"', content)
+
+
+class CoachedPipelineTests(DietFixturesMixin, TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(email="aluno@test.dev", password="x")
+        self._make_foods()
+        self.metric = _make_metric(self.user)
+
+    def _valid_proposal_json(self):
+        return json.dumps(self._valid_proposal())
+
+    def _invalid_proposal_json(self):
+        proposal = self._valid_proposal()
+        proposal["meals"][1]["order"] = 1  # order duplicado -> reprovado na validação
+        return json.dumps(proposal)
+
+    @patch("apps.coach.agents.diet.get_provider")
+    @patch("apps.coach.agents.critic.get_provider")
+    def test_pipeline_regenerates_after_critic_blocker_then_approves(
+        self, mock_critic_provider, mock_diet_provider
+    ):
+        diet_provider = MagicMock()
+        diet_provider.model = "claude-sonnet-4-5"
+        diet_provider.complete.side_effect = [
+            LLMResponse(text=self._valid_proposal_json(), tool_calls=[], usage={}),
+            LLMResponse(text=self._valid_proposal_json(), tool_calls=[], usage={}),
+        ]
+        mock_diet_provider.return_value = diet_provider
+
+        critic_provider = MagicMock()
+        critic_provider.model = "gemini-2.5-flash"
+        critic_provider.complete.side_effect = [
+            _blocker_critic_response(),
+            _good_critic_response(),
+        ]
+        mock_critic_provider.return_value = critic_provider
+
+        result = generate_and_review_meal_plan(self.user)
+
+        self.assertTrue(result.approved)
+        self.assertEqual(result.critic_rounds, 2)
+        self.assertEqual(diet_provider.complete.call_count, 2)
+        self.assertEqual(critic_provider.complete.call_count, 2)
+        self.assertEqual(len(result.agent_runs), 4)  # 2 diet + 2 crítico
+
+    @override_settings(COACH_MAX_CRITIC_ROUNDS=2)
+    @patch("apps.coach.agents.diet.get_provider")
+    @patch("apps.coach.agents.critic.get_provider")
+    def test_pipeline_exhausts_critic_rounds(self, mock_critic_provider, mock_diet_provider):
+        diet_provider = MagicMock()
+        diet_provider.model = "claude-sonnet-4-5"
+        diet_provider.complete.side_effect = [
+            LLMResponse(text=self._valid_proposal_json(), tool_calls=[], usage={}),
+            LLMResponse(text=self._valid_proposal_json(), tool_calls=[], usage={}),
+        ]
+        mock_diet_provider.return_value = diet_provider
+
+        critic_provider = MagicMock()
+        critic_provider.model = "gemini-2.5-flash"
+        critic_provider.complete.side_effect = [
+            _blocker_critic_response(),
+            _blocker_critic_response(),
+        ]
+        mock_critic_provider.return_value = critic_provider
+
+        result = generate_and_review_meal_plan(self.user)
+
+        self.assertFalse(result.approved)
+        self.assertIsNone(result.proposal)
+        self.assertEqual(result.critic_rounds, 2)
+        self.assertEqual(MealPlan.objects.count(), 0)
+
+    @patch("apps.coach.agents.diet.get_provider")
+    @patch("apps.coach.agents.critic.get_provider")
+    def test_pipeline_skips_critic_when_diet_validation_fails(
+        self, mock_critic_provider, mock_diet_provider
+    ):
+        diet_provider = MagicMock()
+        diet_provider.model = "claude-sonnet-4-5"
+        diet_provider.complete.return_value = LLMResponse(
+            text=self._invalid_proposal_json(), tool_calls=[], usage={}
+        )
+        mock_diet_provider.return_value = diet_provider
+
+        critic_provider = MagicMock()
+        mock_critic_provider.return_value = critic_provider
+
+        result = generate_and_review_meal_plan(self.user)
+
+        self.assertFalse(result.approved)
+        self.assertEqual(result.critic_rounds, 0)
+        critic_provider.complete.assert_not_called()
+        mock_critic_provider.assert_not_called()

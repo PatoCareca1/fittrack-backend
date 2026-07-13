@@ -114,6 +114,7 @@ CORS_ALLOWED_ORIGINS = []
 COACH_GENERATOR_PROVIDER = config("COACH_GENERATOR_PROVIDER", default="anthropic")
 COACH_CRITIC_PROVIDER = config("COACH_CRITIC_PROVIDER", default="gemini")
 COACH_MAX_ITERATIONS = config("COACH_MAX_ITERATIONS", default=3, cast=int)
+COACH_MAX_CRITIC_ROUNDS = config("COACH_MAX_CRITIC_ROUNDS", default=2, cast=int)
 
 ANTHROPIC_API_KEY = config("ANTHROPIC_API_KEY", default="")
 GEMINI_API_KEY = config("GEMINI_API_KEY", default="")
